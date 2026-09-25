@@ -1,0 +1,22 @@
+{
+  "name": "crystal-echoes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crystal Echoes: a turn-based 1v1 arena game where every past turn replays as an echo.",
+  "scripts": {
+    "android:add": "cap add android && bash scripts/prepare-android.sh",
+    "android:sync": "cap sync android",
+    "android:build": "cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "~8.5.0",
+    "@capacitor/app": "~8.1.0",
+    "@capacitor/core": "~8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "~8.5.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
