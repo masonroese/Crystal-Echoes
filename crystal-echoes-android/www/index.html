@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0d1315">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Crystal Echoes">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.json">
 <title>Crystal Echoes</title>
 <style>
 @font-face{font-family:'Chakra Petch';src:url('fonts/ChakraPetch-Medium.ttf') format('truetype');font-weight:500;font-display:swap}
@@ -73,6 +80,7 @@ button:focus-visible{outline:2px solid var(--cry);outline-offset:2px}
 .card{--pc:var(--p1);text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:12px;color:inherit;font:inherit;cursor:pointer;display:grid;gap:6px;align-content:start;transition:border-color .15s,transform .15s}
 .card:hover:not(:disabled){border-color:var(--pc);transform:translateY(-2px)}
 .card:disabled{opacity:.32;cursor:not-allowed}
+.card img.spr{width:46px;height:46px;flex:none;border-radius:50%;background:#121a1b;border:1px solid var(--line)}
 .card.sel{border-color:var(--pc);box-shadow:0 0 0 1px var(--pc)}
 .upg{display:grid;gap:10px;border-top:1px solid var(--line);padding-top:14px}
 .upg h3{margin:0;font:700 18px var(--display)}
@@ -129,7 +137,7 @@ kbd{font:600 12px var(--display);background:var(--panel2);border:1px solid var(-
 @media (prefers-reduced-motion:reduce){ .card{transition:none} .card:hover:not(:disabled){transform:none} }
 
 /* ---------- phone layout ---------- */
-html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:var(--bg);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;background:var(--bg);-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-text-size-adjust:100%}
 body{display:flex;align-items:center;justify-content:center;touch-action:none;font-size:14px}
 .app{position:relative;display:flex;flex-direction:column;width:min(100vw,calc((100dvh - 34px)*960/576))}
 .app .stage{width:100%;aspect-ratio:960/576;border:0;border-radius:0}
@@ -182,12 +190,12 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
   <div class="tap" id="tap" hidden></div>
 </div>
 <div id="rules" hidden><ul class="rules">
-        <li>Each round has two 15-second turns, one per player. The first turn alternates each round.</li>
+        <li>Each round has two 10-second turns, one per player. The first turn alternates each round.</li>
         <li>On your turn only your character is live. Every earlier turn, from both players, replays as an echo repeating its exact inputs.</li>
         <li>Four crystals start each turn: top and bottom of the center line, the top-left corner (Amber's side) and the bottom-right corner (Cobalt's side). Carry them into the center ring. A character can carry several at once and delivers them all together. Deliveries by either side count for that side. A knocked-out carrier drops everything it holds.</li>
         <li>Catch-up: from round 3 on, a player who is 2 or more crystals behind gets a bonus crystal just inside their gate for that round. 4 or more behind gets 2. Anyone can take them.</li>
         <li>Scores are banked only at the end of each round, from the second turn. The first turn's deliveries are provisional, because that turn replays as an echo during the second.</li>
-        <li>Turns run the full 15 seconds even after every crystal is delivered, so you can record a route for later rounds. A turn ends early only if every character is knocked out.</li>
+        <li>Turns run the full 10 seconds even after every crystal is delivered, so you can record a route for later rounds. A turn ends early only if every character is knocked out.</li>
         <li>Before each turn, draft a character you haven't used yet. Trappers can't carry crystals.</li>
         <li>In the draft you can spend banked crystals to upgrade the character you pick: 1 crystal for Tier 1, 1 more for Tier 2. Spent crystals come off your score. The upgrade also applies to that character's echoes. Each player starts with 2 crystals.</li>
         <li>Friendly fire applies only to Trapper mines and Frostcaller bolts, which hit your own echoes too. Friendly knockouts don't count toward the tiebreak.</li>
@@ -197,7 +205,7 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 <script>
 (()=>{
 const $=id=>document.getElementById(id);
-const T=32, COLS=30, ROWS=18, W=960, H=576, TICKS=900, R=11;
+const T=32, COLS=30, ROWS=18, W=960, H=576, TICKS=600, R=11;
 const COL={1:'#f0a33a',2:'#5aa2ff'}, DARK={1:'#2a1a05',2:'#06162e'};
 const NAME={1:'Amber',2:'Cobalt'};
 const CRY='#d4c3ff', CRYG='#9b7cf0';
@@ -240,14 +248,15 @@ function computeBonus(r){ // down by 2+ -> 1 crystal, down by 4+ -> 2
 const bonusText=b=>[1,2].filter(p=>b&&b[p]).map(p=>`${b[p]} bonus crystal${b[p]>1?'s':''} near ${NAME[p]}'s gate`).join(' and ');
 const GOAL={x:480,y:288,r:34};
 const SLOW=0.64; // movement scale: 80% x 80%
-const spd=ch=>CH[ch].speed*(ch==='trapper'?0.8:SLOW); // Trapper keeps its earlier speed
+const SPEED_MULT=2; // everyone (and every speed buff) moves twice as fast
+const spd=ch=>CH[ch].speed*(ch==='trapper'?0.8:SLOW)*SPEED_MULT; // Trapper keeps its earlier ratio
 /* ---------- upgrades: bought in the draft, 1 crystal per tier, tier 2 includes tier 1 ---------- */
 const START_CRYSTALS=2; // crystals each player begins with, to spend or keep
 const DASH_CD_T2=30; // 0.5 s
 const RANGER_T2_CD=30; // 0.5 s
 const UPG={
   frost:[
-    {text:()=>'Moves 2 tiles/s faster while any character it froze, enemy or ally, is still frozen.'},
+    {text:()=>'Moves 4 tiles/s faster while any character it froze, enemy or ally, is still frozen.'},
     {text:()=>'Freezing an enemy makes it drop every crystal it is carrying.'}
   ],
   trapper:[
@@ -255,7 +264,7 @@ const UPG={
     {text:()=>'Mines are invisible to the opponent. Only the player who placed them can see them.'}
   ],
   ranger:[
-    {text:()=>'No slowdown while drawing: the Ranger keeps full speed (3.0 tiles/s) during the 0.8 s draw.'},
+    {text:()=>'No slowdown while drawing: the Ranger keeps full speed (6.0 tiles/s) during the 0.8 s draw.'},
     {text:()=>'Shots fire instantly when you press the button, with no draw. There is a 0.5 s reload between shots.'}
   ],
   ninja:[
@@ -271,7 +280,7 @@ const UPG={
     {text:()=>'Dash reload drops to 0.5 s, and the Sprinter can’t be knocked out or frozen while dashing.'}
   ]
 };
-const FROST_BOOST=2*T/60; // +2 tiles/s
+const FROST_BOOST=2*T/60*SPEED_MULT; // +4 tiles/s
 const entSpeed=e=>spd(e.ch)*(e.ch==='sprinter'&&e.tier>=1?1.4:1)
   +(e.ch==='frost'&&e.tier>=1&&sim.ents.some(o=>o.alive&&o.frozen>0&&o.frozenBy===e)?FROST_BOOST:0); // tier 1 Frostcaller
 const SPEC_ORBIT=1.5*T, SPEC_R=7, SPEC_SPIN=2*Math.PI/120; // 1.5 tiles out, 1 turn per 2 s
@@ -297,7 +306,7 @@ const ICON={
 };
 const CH={
  ninja:{name:'Ninja',role:'Melee',speed:2.5,cd:120,text:'Swings a 1.5-tile sword in a 0.2 s arc from behind, around its left side, to straight ahead. Any enemy the blade passes is knocked out. One swing every 2 seconds.'},
- ranger:{name:'Ranger',role:'Ranged',speed:2.5,cd:0,chargeText:'0.8 s draw',text:'Hold the button for 0.8 seconds to draw the bow, moving at 1 tile/s while you hold. Release a full draw to fire an arrow at 30 tiles/s. Releasing early cancels. No reload. Knocks out the first enemy hit; passes through teammates.'},
+ ranger:{name:'Ranger',role:'Ranged',speed:2.5,cd:0,chargeText:'0.8 s draw',text:'Hold the button for 0.8 seconds to draw the bow, moving at 2 tiles/s while you hold. Release a full draw to fire an arrow at 30 tiles/s. Releasing early cancels. No reload. Knocks out the first enemy hit; passes through teammates.'},
  ghost:{name:'Ghost',role:'Phaser',speed:1.95,cd:0,text:'Drifts straight through walls. Any enemy the Ghost touches is knocked out. No action button until Tier 2; slightly slow.'},
  sprinter:{name:'Sprinter',role:'Collector',speed:2.8,cd:80,text:'A quick runner and a strong crystal carrier. Action is a short dash in your facing direction.'},
  trapper:{name:'Trapper',role:'Area denial',speed:3.7333,cd:36,noCarry:true,text:'The fastest character, but cannot pick up crystals. Drops 1 mine per turn that knocks out the first other character to touch it. Mines blink red.'},
@@ -314,7 +323,7 @@ const keys={}, actQ={1:false,2:false}, touchDir=[0,0];
 // input byte: direction (0-8) + 9 if action pressed this tick + 18 if action button is held
 const enc=(dx,dy,a,h)=>(dx+1)+(dy+1)*3+(a?9:0)+(h?18:0);
 const CHARGE_MAX=48; // 0.8 s full draw
-const DRAW_SPEED=32/60; // 1 tile/s while drawing
+const DRAW_SPEED=32/60*SPEED_MULT; // 2 tiles/s while drawing
 const pname=p=>NAME[p]+(G&&G.mode==='cpu'&&p===2?' (CPU)':'');
 const ename=e=>`${NAME[e.p]}'s ${CH[e.ch].name}${e.live?'':' echo'}`;
 const stamp=t=>(t/60).toFixed(1)+'s';
@@ -443,7 +452,7 @@ function step(){
     const held=code>=18,rest=code%18,act=rest>=9,c=rest%9,dx=c%3-1,dy=((c/3)|0)-1;
     if(dx||dy){e.fx=dx;e.fy=dy;}
     let vx,vy;
-    if(e.dash>0){e.dash--;const n=Math.hypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW;vy=e.fy/n*6.5*SLOW;}
+    if(e.dash>0){e.dash--;const n=Math.hypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW*SPEED_MULT;vy=e.fy/n*6.5*SLOW*SPEED_MULT;}
     else{const n=Math.hypot(dx,dy)||1,sp=e.charge>=0&&!(e.ch==='ranger'&&e.tier>=1)?DRAW_SPEED:entSpeed(e); /* tier 1 Ranger isn't slowed */vx=dx/n*sp;vy=dy/n*sp;}
     moveEnt(e,vx,vy);
     if(e.ch==='ranger'&&e.tier>=2){ // tier 2: fires on press, 0.5 s between shots
@@ -653,7 +662,7 @@ function showSetup(){
   showOv(`<div class="panel">
     <p class="eyebrow">1v1 · Turn based · 4 crystals</p>
     <h2>Every turn, your past selves run it back.</h2>
-    <p>Players take 15-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Carry crystals to the center ring to score, and knock out enemy echoes before they take the crystals away.</p>
+    <p>Players take 10-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Carry crystals to the center ring to score, and knock out enemy echoes before they take the crystals away.</p>
     <p class="note">Before each turn you draft a character you haven't used yet.</p>
     <div class="opts">
       <div class="opt"><span>Opponent</span><div class="seg" data-k="mode"><button type="button" data-v="cpu">Computer</button><button type="button" data-v="2p">Second player</button></div></div>
@@ -699,7 +708,7 @@ function showDraft(){
   const cards=ORDER.map(k=>{
     const ui=mine.indexOf(k),c=CH[k];
     return `<button type="button" class="card" style="--pc:${COL[p]}" data-k="${k}" ${ui>=0?'disabled':''}>
-      <span class="hd">${svg(k)}<span><h3>${c.name}</h3><span class="role">${c.role}</span></span></span>
+      <span class="hd"><img class="spr" src="${portrait(k,p)}" alt=""><span><h3>${c.name}</h3><span class="role">${c.role}</span></span></span>
       <p>${c.text}</p>
       <span class="stats"><span>Speed <b>${(spd(k)*60/T).toFixed(1)}</b> tiles/s</span>${c.cd?`<span>Reload <b>${(c.cd/60).toFixed(1)}</b>s</span>`:c.chargeText?`<span>Draw <b>${(CHARGE_MAX/60).toFixed(1)}</b>s</span><span>No reload</span>`:'<span>Passive ability</span>'}${c.noCarry?'<span><b>Can’t carry</b></span>':''}</span>
       ${ui>=0?`<span class="used">Used in round ${ui+1}</span>`:''}
@@ -862,6 +871,121 @@ function drawTrails(s,alpha){
   ctx.restore();
 }
 
+/* ---------- character art: top-down figures, facing +x, drawn in a ~26px box around (0,0) ---------- */
+const TEAM_LIGHT={1:'#ffd08a',2:'#a9ccff'}, TEAM_DEEP={1:'#8a5310',2:'#1d4f9c'};
+function spriteShadow(ctx){ctx.fillStyle='rgba(0,0,0,.35)';ctx.beginPath();ctx.ellipse(1.5,2,11,9,0,0,Math.PI*2);ctx.fill();}
+function blob(ctx,x,y,rx,ry,fill,stroke,lw){ctx.beginPath();ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);if(fill){ctx.fillStyle=fill;ctx.fill();}if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=lw||1;ctx.stroke();}}
+const SPRITES={
+  ninja(ctx,p,t){
+    spriteShadow(ctx);
+    // headband tails streaming behind
+    ctx.strokeStyle=COL[p];ctx.lineWidth=2;ctx.lineCap='round';
+    const w=Math.sin(t/90)*1.5;
+    ctx.beginPath();ctx.moveTo(-4,-1);ctx.quadraticCurveTo(-9,-3+w,-14,-2-w);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(-4,1);ctx.quadraticCurveTo(-9,3-w,-13,5+w);ctx.stroke();
+    // katana along the left side (blade side)
+    ctx.strokeStyle='#dfe6ea';ctx.lineWidth=1.6;ctx.beginPath();ctx.moveTo(-6,-9);ctx.lineTo(9,-9.5);ctx.stroke();
+    ctx.strokeStyle='#3a2a1a';ctx.lineWidth=2.4;ctx.beginPath();ctx.moveTo(-9,-8.8);ctx.lineTo(-5,-9);ctx.stroke();
+    ctx.fillStyle=COL[p];ctx.fillRect(-5.2,-11,1.4,4);
+    // shoulders + hood
+    blob(ctx,-1,0,7.5,9.5,'#1e2327','#0c0f11',1);
+    blob(ctx,1.5,0,6.5,6.5,'#272d33','#0c0f11',1);
+    // headband + eye slit on the front of the hood
+    ctx.strokeStyle=COL[p];ctx.lineWidth=1.8;ctx.beginPath();ctx.arc(1.5,0,5.3,Math.PI*.55,Math.PI*1.45);ctx.stroke();
+    ctx.fillStyle='#f1e6d2';ctx.fillRect(5.6,-2.6,1.8,5.2);
+  },
+  ranger(ctx,p,t){
+    spriteShadow(ctx);
+    // quiver on the back
+    ctx.save();ctx.rotate(-.5);ctx.fillStyle='#6b4a2b';ctx.fillRect(-11,1,7,3.4);
+    ctx.fillStyle='#f3efe6';ctx.fillRect(-12.5,1,1.6,1.2);ctx.fillRect(-12.5,3,1.6,1.2);ctx.restore();
+    // cloak + hood in team colour
+    blob(ctx,-1.5,0,8,9.5,TEAM_DEEP[p],'#0c0f11',1);
+    blob(ctx,1,0,6,6,COL[p],'#0c0f11',1);
+    ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(3,0,3,3.6,0,0,Math.PI*2);ctx.fill(); // hood opening
+    // bow held out front, string pulled back while drawing
+    const pull=this._draw||0;
+    ctx.strokeStyle='#8b5a2b';ctx.lineWidth=2.2;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(7,-10);ctx.quadraticCurveTo(15,0,7,10);ctx.stroke();
+    ctx.strokeStyle='#e8e2d4';ctx.lineWidth=.8;ctx.beginPath();ctx.moveTo(7,-10);ctx.lineTo(7-pull*5,0);ctx.lineTo(7,10);ctx.stroke();
+    if(pull>0){ctx.strokeStyle='#e8e2d4';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(7-pull*5,0);ctx.lineTo(15,0);ctx.stroke();}
+  },
+  ghost(ctx,p,t){
+    // no shadow: it floats
+    const g=ctx.createRadialGradient(0,0,2,0,0,14);g.addColorStop(0,COL[p]+'55');g.addColorStop(1,COL[p]+'00');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,14,0,Math.PI*2);ctx.fill();
+    // round head trailing a wispy tail
+    const k=t/120,wy=Math.sin(k)*2.5;
+    ctx.beginPath();ctx.moveTo(1,-7.5);
+    ctx.bezierCurveTo(-5,-7.5,-8,-2+wy*.4,-14,wy);
+    ctx.bezierCurveTo(-8,2+wy*.4,-5,7.5,1,7.5);
+    ctx.arc(1,0,7.5,Math.PI/2,-Math.PI/2,true);ctx.closePath();
+    ctx.fillStyle='rgba(236,240,255,.92)';ctx.fill();ctx.strokeStyle=COL[p];ctx.lineWidth=1.4;ctx.stroke();
+    // eyes
+    ctx.fillStyle='#161b2e';blob(ctx,4.5,-2.6,1.4,1.9,'#161b2e');blob(ctx,4.5,2.6,1.4,1.9,'#161b2e');
+  },
+  sprinter(ctx,p,t){
+    spriteShadow(ctx);
+    // speed lines
+    ctx.strokeStyle=COL[p]+'99';ctx.lineWidth=1.2;ctx.lineCap='round';
+    for(const y of [-6,0,6]){ctx.beginPath();ctx.moveTo(-11,y);ctx.lineTo(-15-(y===0?3:0),y);ctx.stroke();}
+    // scarf trailing
+    const w=Math.sin(t/70)*2;
+    ctx.fillStyle=TEAM_LIGHT[p];ctx.beginPath();ctx.moveTo(-2,-2);ctx.quadraticCurveTo(-9,-1+w,-13,2+w);ctx.lineTo(-11,4+w);ctx.quadraticCurveTo(-7,3,-2,2);ctx.fill();
+    // pumping arms
+    const s=Math.sin(t/60)*3;
+    blob(ctx,1+s,-7.5,2.2,2.2,COL[p],'#0c0f11',.8);blob(ctx,1-s,7.5,2.2,2.2,COL[p],'#0c0f11',.8);
+    // slim body + head with swept hair
+    blob(ctx,-1,0,5.5,7,COL[p],'#0c0f11',1);
+    blob(ctx,1.5,0,5,5,'#e9c7a0','#0c0f11',1);
+    ctx.fillStyle='#3b2a20';ctx.beginPath();ctx.arc(1.5,0,5,Math.PI*.6,Math.PI*1.4);ctx.lineTo(-4.5,0);ctx.fill();
+    ctx.fillStyle=TEAM_DEEP[p];ctx.fillRect(-1,-5,1.6,10); // headband
+  },
+  trapper(ctx,p,t){
+    spriteShadow(ctx);
+    // backpack with a blinking mine
+    ctx.fillStyle='#3d4a3a';ctx.fillRect(-10,-5.5,6,11);ctx.strokeStyle='#0c0f11';ctx.lineWidth=1;ctx.strokeRect(-10,-5.5,6,11);
+    blob(ctx,-7,0,2.2,2.2,Math.floor(t/300)%2?'#ff3131':'#6e1616');
+    // body
+    blob(ctx,-1,0,6,8.5,TEAM_DEEP[p],'#0c0f11',1);
+    // wide-brim hat seen from above, team band
+    blob(ctx,1.5,0,8,8,'#a57b45','#0c0f11',1);
+    blob(ctx,1.5,0,4.6,4.6,'#8a6334');
+    ctx.strokeStyle=COL[p];ctx.lineWidth=1.6;ctx.beginPath();ctx.arc(1.5,0,4.6,0,Math.PI*2);ctx.stroke();
+    // goggles peeking under the brim
+    ctx.fillStyle='#9fe6ff';blob(ctx,9,-2.4,1.3,1.3,'#9fe6ff','#0c0f11',.6);blob(ctx,9,2.4,1.3,1.3,'#9fe6ff','#0c0f11',.6);
+  },
+  frost(ctx,p,t){
+    spriteShadow(ctx);
+    // frost motes circling
+    ctx.fillStyle='#d8f4ff';
+    for(let i=0;i<3;i++){const a=t/500+i*2.1,x=Math.cos(a)*12,y=Math.sin(a)*12;ctx.beginPath();ctx.moveTo(x,y-1.6);ctx.lineTo(x+1,y);ctx.lineTo(x,y+1.6);ctx.lineTo(x-1,y);ctx.fill();}
+    // robe with pale trim
+    blob(ctx,-1,0,8,9.5,COL[p],'#0c0f11',1);
+    ctx.strokeStyle='#e6f7ff';ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(-1,0,6.2,7.8,0,Math.PI*.6,Math.PI*1.4);ctx.stroke();
+    // pointed hood
+    ctx.fillStyle=TEAM_DEEP[p];ctx.beginPath();ctx.moveTo(-5,0);ctx.quadraticCurveTo(0,-7,6,0);ctx.quadraticCurveTo(0,7,-5,0);ctx.fill();ctx.strokeStyle='#0c0f11';ctx.lineWidth=1;ctx.stroke();
+    // staff with an ice crystal, held front-right
+    ctx.strokeStyle='#7a5a3a';ctx.lineWidth=1.8;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-2,8);ctx.lineTo(11,6);ctx.stroke();
+    ctx.save();ctx.translate(12.5,5.8);ctx.shadowColor='#bfe9ff';ctx.shadowBlur=6;ctx.fillStyle='#dff6ff';
+    ctx.beginPath();ctx.moveTo(0,-3.6);ctx.lineTo(2.2,0);ctx.lineTo(0,3.6);ctx.lineTo(-2.2,0);ctx.closePath();ctx.fill();ctx.restore();
+  }
+};
+function drawSprite(ctx,ch,p,t,opts){
+  const f=SPRITES[ch];
+  if(ch==='ranger')f._draw=opts&&opts.draw||0;
+  f.call(f,ctx,p,t);
+}
+
+// small portraits for the draft cards, rendered once per character and team
+const ART_SCALE=1.25; // figures drawn a little larger than their hitbox so details read on screen
+const PORTRAIT={};
+function portrait(k,p){
+  const key=k+p;if(PORTRAIT[key])return PORTRAIT[key];
+  const c=document.createElement('canvas');c.width=c.height=96;const g=c.getContext('2d');
+  g.translate(50,48);g.scale(3.5,3.5);drawSprite(g,k,p,400,{draw:.6});
+  return PORTRAIT[key]=c.toDataURL();
+}
 function drawEnt(e){
   const c=COL[e.p];
   ctx.save();ctx.translate(e.x,e.y);
@@ -870,29 +994,26 @@ function drawEnt(e){
     ctx.strokeStyle='#11181a';ctx.lineWidth=2.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-4,0);ctx.lineTo(-1,3.5);ctx.lineTo(4.5,-3.5);ctx.stroke();
     ctx.restore();return;
   }
-  if(!e.alive){
-    ctx.globalAlpha=.4;ctx.strokeStyle=c;ctx.lineWidth=2;
+  if(!e.alive){ // knocked out: faded figure with an X
+    ctx.save();ctx.globalAlpha=.25;ctx.rotate(Math.atan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);drawSprite(ctx,e.ch,e.p,0);ctx.restore();
+    ctx.globalAlpha=.5;ctx.strokeStyle=c;ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(0,0,R-2,0,Math.PI*2);ctx.stroke();
     ctx.beginPath();ctx.moveTo(-6,-6);ctx.lineTo(6,6);ctx.moveTo(6,-6);ctx.lineTo(-6,6);ctx.stroke();
     ctx.restore();return;
   }
   ctx.globalAlpha=(e.live?1:.62)*(e.ch==='ghost'?.8:1);
-  if(e.live){ctx.shadowColor=c;ctx.shadowBlur=14;}
-  // facing wedge
-  const a=Math.atan2(e.fy,e.fx);
-  ctx.fillStyle=c;ctx.beginPath();
-  ctx.moveTo(Math.cos(a)*(R+7),Math.sin(a)*(R+7));
-  ctx.lineTo(Math.cos(a+.5)*(R+1),Math.sin(a+.5)*(R+1));
-  ctx.lineTo(Math.cos(a-.5)*(R+1),Math.sin(a-.5)*(R+1));ctx.fill();
-  ctx.beginPath();ctx.arc(0,0,R,0,Math.PI*2);ctx.fill();
-  ctx.shadowBlur=0;
+  // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
+  ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
+  ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
+  ctx.save();ctx.rotate(Math.atan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
+  drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
+  ctx.restore();
   if(e.charge>=0){ // bow charge meter
     const f=e.charge/CHARGE_MAX;ctx.strokeStyle=f>=1?'#ffffff':'#f4f7f5';ctx.lineWidth=f>=1?3:2;
     if(f>=1){ctx.shadowColor='#ffffff';ctx.shadowBlur=10;}
     ctx.beginPath();ctx.arc(0,0,R+5,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(.02,f));ctx.stroke();ctx.shadowBlur=0;
   }
   if(!e.live){ctx.setLineDash([3,3]);ctx.strokeStyle='#e7eee9';ctx.lineWidth=1;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
-  ctx.save();ctx.scale(.62,.62);ctx.translate(-12,-12);ctx.strokeStyle=DARK[e.p];ctx.lineWidth=2.8;ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke(PATH[e.ch]);ctx.restore();
   if(e.frozen>0){
     ctx.globalAlpha=.85;ctx.fillStyle='rgba(191,233,255,.35)';ctx.strokeStyle='#bfe9ff';ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(0,0,R+4,0,Math.PI*2);ctx.fill();ctx.stroke();
@@ -1025,7 +1146,7 @@ function draw(){
 let hudKey='';
 function updateHUD(){
   const t1=G?G.total[1]:0,t2=G?G.total[2]:0;
-  let tm='15.0';
+  let tm=(TICKS/60).toFixed(1);
   if(sim&&(state==='play'||state==='paused'))tm=sim.phase==='count'?'READY':((TICKS-sim.t)/60).toFixed(1);
   else if(state==='summary'||state==='over')tm='0.0';
   const ap=G?active():0;
@@ -1063,6 +1184,10 @@ if(CapApp)CapApp.addListener('backButton',()=>{ // Android back: pause, resume, 
 showSetup();
 requestAnimationFrame(frame);
 })();
+</script>
+<script>
+if('serviceWorker' in navigator && location.protocol.startsWith('http') && !(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform()))
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
 </body>
 </html>
