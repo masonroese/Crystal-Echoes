@@ -1,5 +1,5 @@
 // Keeps Crystal Echoes playable offline once it has been opened.
-const CACHE='crystal-echoes-9d757a460e';
+const CACHE='crystal-echoes-64c0d00eac';
 const FILES=["./", "index.html", "manifest.json", "fonts/Barlow-Medium.ttf", "fonts/Barlow-Regular.ttf", "fonts/Barlow-SemiBold.ttf", "fonts/ChakraPetch-Bold.ttf", "fonts/ChakraPetch-Medium.ttf", "fonts/ChakraPetch-SemiBold.ttf", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png", "icons/maskable-512.png"];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)));self.skipWaiting();});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim();});
