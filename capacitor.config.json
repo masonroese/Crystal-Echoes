@@ -1,0 +1,8 @@
+{
+  "appId": "com.crystalechoes.game",
+  "appName": "Crystal Echoes",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0d1315"
+  }
+}
