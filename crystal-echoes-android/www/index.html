@@ -11,6 +11,11 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.json">
+<!-- online play: Firebase (loads only when there's a connection) + this project's settings -->
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
 <title>Crystal Echoes</title>
 <style>
 @font-face{font-family:'Chakra Petch';src:url('fonts/ChakraPetch-Medium.ttf') format('truetype');font-weight:500;font-display:swap}
@@ -35,6 +40,19 @@ body{color:var(--ink);font:15px/1.5 var(--body)}
 .top h1{font:700 26px/1.1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase}
 .top h1 span{color:var(--cry)}
 .top p{margin:0;color:var(--muted);font-size:14px}
+.field{font:500 15px var(--body);background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:8px 10px}
+.mlist{display:grid;gap:6px}
+.mrow{display:grid;grid-template-columns:5.5em 1fr auto 8em;gap:10px;align-items:center;text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:10px 12px;color:inherit;font:inherit;cursor:pointer}
+.mrow:hover{border-color:var(--cry)}
+.code{font-family:var(--display);letter-spacing:.12em;color:var(--cry)}
+.yt{color:var(--cry)}
+@media (max-width:600px){.mrow{grid-template-columns:1fr 1fr}}
+.readybar{position:absolute;left:0;right:0;top:71%;display:flex;justify-content:center;z-index:6;pointer-events:none}
+.readybar .btn{pointer-events:auto}
+.readybar[hidden],.replaybar[hidden]{display:none!important}
+.replaybar{position:absolute;left:10px;right:10px;top:10px;z-index:6;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:rgba(13,19,21,.85);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font:600 13px var(--display);letter-spacing:.04em}
+.replaybar .btn,.readybar .btn{padding:6px 12px;font-size:12px}
+.readybar .btn{background:rgba(13,19,21,.8)}
 .reset{font:600 12px var(--display);letter-spacing:.1em;text-transform:uppercase;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:5px 12px;cursor:pointer}
 .reset:hover{color:var(--ink);border-color:var(--muted)}
 
@@ -182,6 +200,8 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
   </div>
   <div class="stage" id="stage">
     <canvas id="cv" width="960" height="576" aria-label="Game arena"></canvas>
+    <div class="readybar" id="readyBar" hidden><button type="button" class="btn ghost" id="replayBtn">▶ Watch last turn</button></div>
+    <div class="replaybar" id="replayBar" hidden><span id="rpLabel"></span><span class="row"><button type="button" class="btn ghost" id="rpAgain" hidden>Watch again</button><button type="button" class="btn ghost" id="rpSpeed">2× speed</button><button type="button" class="btn" id="rpClose">Back</button></span></div>
   </div>
 </div>
 <div class="ov" id="ov"></div>
@@ -203,6 +223,28 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
       </ul></div>
 <div class="rotate">Turn your phone sideways to play.</div>
 <script>
+/* ---------- deterministic math ----------
+   Built-in Math.sin/cos/atan2/hypot can differ in the last digit between phones and browsers.
+   Online play replays the other player's recorded inputs, so every device must compute exactly
+   the same numbers. These use only + - * / and sqrt, which are identical everywhere. */
+const HALF_PI=1.5707963267948966,PI_=3.141592653589793;
+function sinPoly(r){const r2=r*r;return r*(1-r2/6*(1-r2/20*(1-r2/42*(1-r2/72*(1-r2/110*(1-r2/156*(1-r2/210)))))));}
+function cosPoly(r){const r2=r*r;return 1-r2/2*(1-r2/12*(1-r2/30*(1-r2/56*(1-r2/90*(1-r2/132*(1-r2/182*(1-r2/240)))))));}
+function dsin(x){const k=Math.round(x/HALF_PI),r=x-k*HALF_PI,q=((k%4)+4)%4;return q===0?sinPoly(r):q===1?cosPoly(r):q===2?-sinPoly(r):-cosPoly(r);}
+function dcos(x){const k=Math.round(x/HALF_PI),r=x-k*HALF_PI,q=((k%4)+4)%4;return q===0?cosPoly(r):q===1?-sinPoly(r):q===2?-cosPoly(r):sinPoly(r);}
+function datanSmall(z){ // |z| <= 1: halve the angle twice, then a short series
+  z=z/(1+Math.sqrt(1+z*z));z=z/(1+Math.sqrt(1+z*z));
+  const z2=z*z;let s=0;for(let n=25;n>=1;n-=2)s=1/n-z2*s;return 4*z*s;
+}
+function datan2(y,x){
+  if(x===0&&y===0)return 0;
+  const ax=Math.abs(x),ay=Math.abs(y);
+  let a=ay<=ax?datanSmall(ay/ax):HALF_PI-datanSmall(ax/ay);
+  if(x<0)a=PI_-a;return y<0?-a:a;
+}
+function dhypot(x,y){return Math.sqrt(x*x+y*y);}
+function dasin(x){return datan2(x,Math.sqrt(Math.max(0,1-x*x)));}
+
 (()=>{
 const $=id=>document.getElementById(id);
 const T=32, COLS=30, ROWS=18, W=960, H=576, TICKS=600, R=11;
@@ -255,6 +297,18 @@ const START_CRYSTALS=2; // crystals each player begins with, to spend or keep
 const DASH_CD_T2=30; // 0.5 s
 const RANGER_T2_CD=30; // 0.5 s
 const UPG={
+  ben:[
+    {text:()=>'Shield bubble doubles in size: 2 tiles around him.'},
+    {text:()=>'The action button drops an identical shield where he stands (once per turn). It stays for the rest of the turn, even if Ben is knocked out.'}
+  ],
+  sniper:[
+    {text:()=>'Bullets pierce: one shot hits every enemy along the line.'},
+    {text:()=>'2 shots per turn instead of 1.'}
+  ],
+  time:[
+    {text:()=>'Time stops last 2 seconds instead of 1.'},
+    {text:()=>'Only enemy echoes are stopped; your own keep moving. Reload drops from 5 s to 3 s.'}
+  ],
   frost:[
     {text:()=>'Moves 4 tiles/s faster while any character it froze, enemy or ally, is still frozen.'},
     {text:()=>'Freezing an enemy makes it drop every crystal it is carrying.'}
@@ -291,6 +345,10 @@ function minesViewer(){ // whose eyes the board is drawn for
   if(G.mode==='cpu')return 1;
   return state==='play'||state==='paused'?active():0; // hot-seat: hide all secret mines between turns
 }
+const SHIELD_R=T; // Ben's bubble: 1 tile, 2 with tier 1
+const shieldOn=s=>s.dropped||s.owner.alive;
+// is o covered by one of its own team's shields against an attack from team `fromP`? (never against Ghosts)
+const shielded=(o,fromP)=>fromP!==o.p&&sim.shields.some(s=>shieldOn(s)&&s.owner.p===o.p&&dhypot(o.x-s.x,o.y-s.y)<=s.r);
 const invuln=e=>e.ch==='sprinter'&&e.tier>=2&&e.dash>0; // tier 2 Sprinter mid-dash
 const SPAWN_Y=[288,224,352,160,416];
 const spawn=(p,r)=>({x:p===1?80:880,y:SPAWN_Y[r%5]});
@@ -302,6 +360,9 @@ const ICON={
  ghost:'M6 20V11a6 6 0 0 1 12 0v9l-2-2-2 2-2-2-2 2-2-2zM10 11h.01M14 11h.01',
  sprinter:'M5 6l6 6-6 6M12 6l6 6-6 6',
  trapper:'M19 12a7 7 0 1 1-14 0a7 7 0 1 1 14 0zM14.5 12a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0z',
+ ben:'M12 3l7 3v5c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V6zM12 7v10',
+ sniper:'M3 12h18M17 12v3M8 12l-2 4M19 9a2 2 0 1 1 0 .01M2 12h2',
+ time:'M7 3h10M7 21h10M8 3c0 5 8 7 8 9s-8 4-8 9M16 3c0 5-8 7-8 9s8 4 8 9',
  frost:'M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9'
 };
 const CH={
@@ -310,16 +371,20 @@ const CH={
  ghost:{name:'Ghost',role:'Phaser',speed:1.95,cd:0,text:'Drifts straight through walls. Any enemy the Ghost touches is knocked out. No action button until Tier 2; slightly slow.'},
  sprinter:{name:'Sprinter',role:'Collector',speed:2.8,cd:80,text:'A quick runner and a strong crystal carrier. Action is a short dash in your facing direction.'},
  trapper:{name:'Trapper',role:'Area denial',speed:3.7333,cd:36,noCarry:true,text:'The fastest character, but cannot pick up crystals. Drops 1 mine per turn that knocks out the first other character to touch it. Mines blink red.'},
+ ben:{name:'Ben Shieldon',role:'Guardian',speed:2.5,cd:0,text:'Always surrounded by a 1-tile shield bubble. Enemy attacks and freezes can’t reach him or any teammate inside it. Ghosts and spectres pass straight through. No action button until Tier 2.'},
+ sniper:{name:'Sniper',role:'Marksman',speed:0,cd:20,shots:1,text:'Can’t move. Aim the rifle in any direction; a line shows the aim. Press to fire: the bullet is instant, goes through walls, and hits the first enemy in its path. 1 shot per turn.'},
+ time:{name:'Timekeeper',role:'Time-bender',speed:2.2,cd:300,text:'Stops every echo on the map, both teams, for 1 second. Stopped echoes pick up their routes exactly where they left off. The live character keeps moving.'},
  frost:{name:'Frostcaller',role:'Disruptor',speed:2.2,cd:84,text:'Throw a frost bolt that freezes the first character it hits for 2.5 seconds. Each character can only be frozen once per turn; bolts pass through anyone already frozen. A frozen echo resumes its route where it stopped.'}
 };
-const ORDER=['ninja','ranger','ghost','sprinter','trapper','frost'];
+const ORDER=['ninja','ranger','ghost','sprinter','trapper','frost','ben','time','sniper'];
 const PATH={}; for(const k in ICON) PATH[k]=new Path2D(ICON[k]);
 const svg=k=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON[k]}"/></svg>`;
 
 /* ---------- state ---------- */
 let state='setup', G=null, sim=null, view=null, prevSim=null;
 const opts={mode:matchMedia('(pointer:coarse)').matches?'cpu':'cpu',rounds:5};
-const keys={}, actQ={1:false,2:false}, touchDir=[0,0];
+const keys={}, actQ={1:false,2:false}, touchDir=[0,0], touchVec=[0,0]; // touchVec: raw joystick direction (Sniper aim)
+let mouseAim=null; // canvas point the mouse is aiming at (Sniper), or null
 // input byte: direction (0-8) + 9 if action pressed this tick + 18 if action button is held
 const enc=(dx,dy,a,h)=>(dx+1)+(dy+1)*3+(a?9:0)+(h?18:0);
 const CHARGE_MAX=48; // 0.8 s full draw
@@ -328,19 +393,31 @@ const pname=p=>NAME[p]+(G&&G.mode==='cpu'&&p===2?' (CPU)':'');
 const ename=e=>`${NAME[e.p]}'s ${CH[e.ch].name}${e.live?'':' echo'}`;
 const stamp=t=>(t/60).toFixed(1)+'s';
 
-function mkEnt(p,r,ch,live,rec,tier){
+function mkEnt(p,r,ch,live,rec,tier,aimRec){
   const sp=spawn(p,r);
-  return {p,r,ch,live,x:sp.x,y:sp.y,fx:p===1?1:-1,fy:0,alive:true,frozen:0,cd:0,dash:0,mines:0,carry:[],swing:null,charge:-1,chargeF:0,idx:0,frozeOnce:false,dropped:false,tier:tier||0,
-    rec:rec||new Uint8Array(TICKS).fill(4),trail:[sp.x,sp.y],ai:null};
+  return {p,r,ch,live,x:sp.x,y:sp.y,fx:p===1?1:-1,fy:0,alive:true,frozen:0,cd:0,dash:0,mines:0,carry:[],swing:null,charge:-1,chargeF:0,idx:0,frozeOnce:false,dropped:false,stopped:0,tier:tier||0,
+    rec:rec||new Uint8Array(TICKS).fill(4),trail:[sp.x,sp.y],ai:null,
+    shots:0,aim:p===1?0:Math.PI,aimRec:aimRec||new Uint8Array(TICKS).fill(p===1?0:128)}; // Sniper aim: 256 steps per circle, recorded every tick
 }
-function buildSim(){
-  const ents=G.turns.map(tn=>mkEnt(tn.p,tn.r,tn.ch,false,tn.rec,tn.tier));
-  const p=active();ents.push(mkEnt(p,G.round,G.picks[p][G.round],true,null,G.tiers[p][G.round]));
+function simFrom(ents,round,active,extra){
   const spectres=[]; // upgraded Ghosts: tier 1 = one spectre, tier 2 = two opposite each other
   for(const e of ents)if(e.ch==='ghost')for(let i=0;i<e.tier;i++)
-    spectres.push({owner:e,a:i*Math.PI,x:e.x+Math.cos(i*Math.PI)*SPEC_ORBIT,y:e.y+Math.sin(i*Math.PI)*SPEC_ORBIT,cx:0,cy:0,dropped:false});
-  return {t:0,active:p,grid:BASE,ents,spectres,proj:[],mines:[],fx:[],
-    crystals:CRYSTALS.concat(bonusCrystals(G.round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0})),delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'count',count:180,endAt:null};
+    spectres.push({owner:e,a:i*Math.PI,x:e.x+dcos(i*Math.PI)*SPEC_ORBIT,y:e.y+dsin(i*Math.PI)*SPEC_ORBIT,cx:0,cy:0,dropped:false});
+  const shields=[]; // Ben Shieldon's bubbles
+  for(const e of ents)if(e.ch==='ben')shields.push({owner:e,r:SHIELD_R*(e.tier>=1?2:1),x:e.x,y:e.y,dropped:false});
+  return {t:0,active,grid:BASE,ents,spectres,shields,proj:[],mines:[],fx:[],
+    crystals:CRYSTALS.concat(bonusCrystals(round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0})),delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'ready',endAt:null,...extra};
+}
+function buildSim(){
+  const ents=G.turns.map(tn=>mkEnt(tn.p,tn.r,tn.ch,false,tn.rec,tn.tier,tn.aimRec));
+  const p=active();ents.push(mkEnt(p,G.round,G.picks[p][G.round],true,null,G.tiers[p][G.round]));
+  return simFrom(ents,G.round,p,{});
+}
+// replay of the most recent turn: every character runs from its recording, so the turn plays out exactly as it happened
+function buildReplay(){
+  const k=G.turns.length-1,tn=G.turns[k];
+  const ents=G.turns.map(t=>mkEnt(t.p,t.r,t.ch,false,t.rec,t.tier,t.aimRec));
+  return simFrom(ents,tn.r,tn.p,{phase:'run',replay:true,focus:ents[k],turn:tn});
 }
 
 /* ---------- physics ---------- */
@@ -350,7 +427,7 @@ function hitsWall(x,y,rad){
   for(let r=r0;r<=r1;r++)for(let c=c0;c<=c1;c++){
     if(!solid(c,r))continue;
     const nx=Math.max(c*T,Math.min(x,c*T+T)),ny=Math.max(r*T,Math.min(y,r*T+T));
-    if((x-nx)**2+(y-ny)**2<rad*rad)return true;
+    const ex=x-nx,ey=y-ny;if(ex*ex+ey*ey<rad*rad)return true;
   }
   return false;
 }
@@ -361,15 +438,16 @@ function moveEnt(e,vx,vy){
   if(vx&&!hitsWall(e.x+vx,e.y,R))e.x+=vx;
   if(vy&&!hitsWall(e.x,e.y+vy,R))e.y+=vy;
 }
-const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const dist=(a,b)=>dhypot(a.x-b.x,a.y-b.y);
 function fx(k,x,y,o={}){sim.fx.push({k,x,y,t:0,m:o.m||24,...o});}
-function log(s){sim.log.push([sim.t,s]);}
+function log(s,kind='info'){sim.log.push([sim.t,s,kind]);} // kind: 'score' | 'ko' | 'info' (summary shows scores and knockouts)
 
 function kill(o,by,how){
   if(!o.alive||invuln(o))return;
+  if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});return;} // Ben's shield
   o.alive=false; o.frozen=0; if(o.p!==by.p)sim.kills[by.p]++; // friendly knockouts don't count
-  const verb={slash:'slashed',arrow:'shot',haunt:'haunted'}[how];
-  log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} ${verb} ${ename(o)}`);
+  const verb={slash:'slashed',arrow:'shot',haunt:'haunted',snipe:'sniped'}[how];
+  log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} ${verb} ${ename(o)}`,'ko');
   fx('ko',o.x,o.y,{c:COL[o.p],m:30});
   if(o.carry.length)dropCrystals(o);
 }
@@ -378,21 +456,47 @@ function dropCrystals(o){
   let x=o.x,y=o.y;
   if(hitsWall(x,y,8)){ // a Ghost died inside a wall: push the crystal to the nearest open tile
     let best=null,bd=1e9;
-    for(let r=1;r<ROWS-1;r++)for(let c=1;c<COLS-1;c++){if(solid(c,r))continue;const cx=c*T+16,cy=r*T+16,d=(cx-x)**2+(cy-y)**2;if(d<bd){bd=d;best=[cx,cy];}}
+    for(let r=1;r<ROWS-1;r++)for(let c=1;c<COLS-1;c++){if(solid(c,r))continue;const cx=c*T+16,cy=r*T+16,d=(cx-x)*(cx-x)+(cy-y)*(cy-y);if(d<bd){bd=d;best=[cx,cy];}}
     [x,y]=best;
   }
   held.forEach((k,i)=>{ // spread a dropped stack a little so each crystal is visible
-    const a=i*2.4;k.carrier=null;k.x=x+(i?Math.cos(a)*10:0);k.y=y+(i?Math.sin(a)*10:0);k.drop=20;
+    const a=i*2.4;k.carrier=null;k.x=x+(i?dcos(a)*10:0);k.y=y+(i?dsin(a)*10:0);k.drop=20;
   });
   log(`${ename(o)} dropped ${held.length>1?held.length+' crystals':'the '+held[0].n+' crystal'}`);
 }
 
+const SNIPER_DELAY=30; // 0.5 s
+function rayExit(x,y,dx,dy){ // distance along the ray to the edge of the arena
+  let t=1e9;if(dx>0)t=Math.min(t,(W-x)/dx);if(dx<0)t=Math.min(t,-x/dx);if(dy>0)t=Math.min(t,(H-y)/dy);if(dy<0)t=Math.min(t,-y/dy);return t;
+}
+function fireSniper(e){
+  const dx=dcos(e.aim),dy=dsin(e.aim);let stop=rayExit(e.x,e.y,dx,dy);
+  for(const sh of sim.shields){ // an enemy Ben shield stops the bullet where it enters the bubble
+    if(!shieldOn(sh)||sh.owner.p===e.p)continue;
+    const ox=sh.x-e.x,oy=sh.y-e.y,tc=ox*dx+oy*dy,d2=ox*ox+oy*oy-tc*tc;
+    if(d2>sh.r*sh.r)continue;const th=Math.sqrt(sh.r*sh.r-d2),t0=tc-th;
+    if(tc+th<0)continue;stop=Math.min(stop,Math.max(0,t0));
+  }
+  const hits=[];
+  for(const o of sim.ents){
+    if(!o.alive||o.p===e.p||invuln(o))continue; // no friendly fire
+    const ox=o.x-e.x,oy=o.y-e.y,t=ox*dx+oy*dy;
+    if(t<=0||t>stop)continue;
+    if(Math.abs(ox*dy-oy*dx)<=R+2)hits.push([t,o]);
+  }
+  hits.sort((a,b)=>a[0]-b[0]);
+  const victims=e.tier>=1?hits:hits.slice(0,1); // tier 1 pierces
+  const end=victims.length&&e.tier<1?victims[0][0]:stop;
+  victims.forEach(([,o])=>kill(o,e,'snipe'));
+  fx('tracer',e.x,e.y,{x2:e.x+dx*end,y2:e.y+dy*end,c:COL[e.p],m:16});
+  if(!victims.length)log(`${ename(e)} fired and missed`);
+}
 function doAction(e){
-  const c=CH[e.ch], n=Math.hypot(e.fx,e.fy)||1;
+  const c=CH[e.ch], n=dhypot(e.fx,e.fy)||1;
   switch(e.ch){
     case 'ninja':{
       // start a 0.2 s swing: blade sweeps from straight behind, across the left side, to straight ahead
-      e.cd=c.cd; e.swing={t:0,a0:Math.atan2(e.fy,e.fx)};
+      e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};
       break;}
     case 'ranger': case 'frost':{
       e.cd=c.cd; const sp=e.ch==='ranger'?16:5.5; // ranger arrow 30 tiles/s
@@ -404,6 +508,20 @@ function doAction(e){
       for(const sp of sim.spectres)if(sp.owner===e&&!sp.dropped){sp.dropped=true;sp.cx=e.x;sp.cy=e.y;}
       fx('ice',e.x,e.y,{m:20});log(`${ename(e)} dropped its spectres`);
       break;
+    case 'ben':
+      if(e.tier<2||e.dropped)break; // tier 2: drop a copy of the shield here, once per turn
+      e.dropped=true;sim.shields.push({owner:e,r:SHIELD_R*2,x:e.x,y:e.y,dropped:true});
+      fx('block',e.x,e.y,{c:COL[e.p],m:24});log(`${ename(e)} planted a shield`);
+      break;
+    case 'sniper':{ // instant bullet along the aim line, through walls
+      if(sim.t<SNIPER_DELAY||e.shots>=(e.tier>=2?2:1))break; // no shots in the first 0.5 s of a turn
+      e.shots++;e.cd=c.cd;fireSniper(e);
+      break;}
+    case 'time':{ // stop echoes in place; they resume their routes afterwards
+      e.cd=e.tier>=2?180:c.cd;const dur=e.tier>=1?120:60;let n=0;
+      for(const o of sim.ents)if(o.alive&&!o.live&&o!==e&&(e.tier<2||o.p!==e.p)){o.stopped=Math.max(o.stopped,dur);o.swing=null;n++;}
+      fx('timewave',e.x,e.y,{m:36});log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
+      break;}
     case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); break;
     case 'trapper':
       if(e.mines>=maxMines(e))return;
@@ -416,10 +534,10 @@ const SWING=12, BLADE=1.5*T+R; // 0.2 s swing, blade reaches 1.5 tiles past the 
 const swingAng=(sw,t)=>sw.a0-Math.PI+Math.PI*t/SWING; // behind (a0-180°) -> left (a0-90°) -> ahead (a0)
 const swingAngR=(sw,t)=>2*sw.a0-swingAng(sw,t); // mirror image on the right side (tier 1)
 function inArc(e,o,a1,a2){ // is o inside the blade's sweep from angle a1 to a2 (a1<a2)?
-  const dx=o.x-e.x,dy=o.y-e.y,d=Math.hypot(dx,dy);
+  const dx=o.x-e.x,dy=o.y-e.y,d=dhypot(dx,dy);
   if(d>BLADE+R)return false;
-  const pad=d<=R?Math.PI:Math.asin(R/d);
-  const rel=((Math.atan2(dy,dx)-a1)%(2*Math.PI)+2*Math.PI)%(2*Math.PI);
+  const pad=d<=R?Math.PI:dasin(R/d);
+  const rel=((datan2(dy,dx)-a1)%(2*Math.PI)+2*Math.PI)%(2*Math.PI);
   return rel<=a2-a1+pad||rel>=2*Math.PI-pad;
 }
 function swingStep(e){
@@ -429,6 +547,14 @@ function swingStep(e){
     if(inArc(e,o,swingAng(sw,t0),swingAng(sw,sw.t))||(e.tier>=1&&inArc(e,o,swingAngR(sw,sw.t),swingAngR(sw,t0))))kill(o,e,'slash');
   }
   if(sw.t>=SWING)e.swing=null;
+}
+const aimByte=a=>Math.round(((a%(2*Math.PI))+2*Math.PI)%(2*Math.PI)/(2*Math.PI)*256)&255;
+function humanAimByte(e){ // joystick sets the angle directly; mouse points; A/D or arrows rotate
+  if(dhypot(touchVec[0],touchVec[1])>.3)return aimByte(datan2(touchVec[1],touchVec[0]));
+  const turn=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0);
+  if(turn){mouseAim=null;return aimByte(e.aim+turn*0.045);}
+  if(mouseAim)return aimByte(datan2(mouseAim.y-e.y,mouseAim.x-e.x));
+  return aimByte(e.aim);
 }
 function humanInput(){
   let dx=(keys.d||keys.arrowright?1:0)-(keys.a||keys.arrowleft?1:0),dy=(keys.s||keys.arrowdown?1:0)-(keys.w||keys.arrowup?1:0);
@@ -444,16 +570,21 @@ function step(){
     if(!e.alive)continue;
     // frozen characters pause their own input clock, so an echo resumes its route where it stopped
     if(e.frozen>0){e.frozen--;if(e.live&&!cpuTurn())actQ[1]=false;continue;}
+    if(e.stopped>0){e.stopped--;continue;} // Timekeeper: paused, route resumes afterwards
     let code;
     if(e.live){code=cpuTurn()?aiInput(e,t):humanInput();e.rec[e.idx]=code;}
     else code=e.rec[e.idx];
+    if(e.ch==='sniper'){ // free aim, recorded as one byte per tick so the echo aims identically
+      if(e.live)e.aimRec[e.idx]=cpuTurn()?(e.aiAim??e.aimRec[e.idx]):humanAimByte(e);
+      e.aim=e.aimRec[e.idx]/256*Math.PI*2;
+    }
     e.idx++;
     if(e.cd>0)e.cd--;
     const held=code>=18,rest=code%18,act=rest>=9,c=rest%9,dx=c%3-1,dy=((c/3)|0)-1;
     if(dx||dy){e.fx=dx;e.fy=dy;}
     let vx,vy;
-    if(e.dash>0){e.dash--;const n=Math.hypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW*SPEED_MULT;vy=e.fy/n*6.5*SLOW*SPEED_MULT;}
-    else{const n=Math.hypot(dx,dy)||1,sp=e.charge>=0&&!(e.ch==='ranger'&&e.tier>=1)?DRAW_SPEED:entSpeed(e); /* tier 1 Ranger isn't slowed */vx=dx/n*sp;vy=dy/n*sp;}
+    if(e.dash>0){e.dash--;const n=dhypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW*SPEED_MULT;vy=e.fy/n*6.5*SLOW*SPEED_MULT;}
+    else{const n=dhypot(dx,dy)||1,sp=e.charge>=0&&!(e.ch==='ranger'&&e.tier>=1)?DRAW_SPEED:entSpeed(e); /* tier 1 Ranger isn't slowed */vx=dx/n*sp;vy=dy/n*sp;}
     moveEnt(e,vx,vy);
     if(e.ch==='ranger'&&e.tier>=2){ // tier 2: fires on press, 0.5 s between shots
       if(act&&e.cd===0){doAction(e);e.cd=RANGER_T2_CD;}
@@ -470,17 +601,18 @@ function step(){
   // spectres: orbit their Ghost (paused while it is frozen) or circle the spot they were dropped
   for(const sp of sim.spectres){
     const g=sp.owner;
-    if(sp.dropped){sp.a+=SPEC_SPIN;sp.x=sp.cx+Math.cos(sp.a)*SPEC_ORBIT;sp.y=sp.cy+Math.sin(sp.a)*SPEC_ORBIT;}
-    else if(g.alive){if(g.frozen===0)sp.a+=SPEC_SPIN;sp.x=g.x+Math.cos(sp.a)*SPEC_ORBIT;sp.y=g.y+Math.sin(sp.a)*SPEC_ORBIT;}
+    if(sp.dropped){sp.a+=SPEC_SPIN;sp.x=sp.cx+dcos(sp.a)*SPEC_ORBIT;sp.y=sp.cy+dsin(sp.a)*SPEC_ORBIT;}
+    else if(g.alive){if(g.frozen===0)sp.a+=SPEC_SPIN;sp.x=g.x+dcos(sp.a)*SPEC_ORBIT;sp.y=g.y+dsin(sp.a)*SPEC_ORBIT;}
     else continue; // an orbiting spectre vanishes with its Ghost
     for(const o of sim.ents)
-      if(o.alive&&o.p!==g.p&&Math.hypot(o.x-sp.x,o.y-sp.y)<R+SPEC_R)kill(o,g,'spectre');
+      if(o.alive&&o.p!==g.p&&dhypot(o.x-sp.x,o.y-sp.y)<R+SPEC_R)kill(o,g,'spectre');
   }
+  for(const sh of sim.shields)if(!sh.dropped&&sh.owner.alive){sh.x=sh.owner.x;sh.y=sh.owner.y;}
   // ghost touch
   for(const g of sim.ents){
     if(!g.alive||g.ch!=='ghost')continue;
     for(const o of sim.ents){
-      if(o===g||!o.alive||o.p===g.p||Math.hypot(o.x-g.x,o.y-g.y)>=R*2-2)continue;
+      if(o===g||!o.alive||o.p===g.p||dhypot(o.x-g.x,o.y-g.y)>=R*2-2)continue;
       kill(o,g,'haunt');
       if(o.ch==='ghost')kill(g,o,'haunt');
       if(!g.alive)break;
@@ -491,8 +623,10 @@ function step(){
     for(let s=0;s<2&&!pr.dead;s++){
       pr.x+=pr.vx/2;pr.y+=pr.vy/2;
       if(solid(Math.floor(pr.x/T),Math.floor(pr.y/T))){pr.dead=true;fx('spark',pr.x,pr.y,{c:pr.k==='frost'?'#bfe9ff':COL[pr.p],m:10});break;}
+      if(sim.shields.some(sh=>shieldOn(sh)&&sh.owner.p!==pr.p&&dhypot(pr.x-sh.x,pr.y-sh.y)<=sh.r)){ // enemy shield absorbs it
+        pr.dead=true;fx('block',pr.x,pr.y,{c:COL[3-pr.p],m:14});break;}
       for(const o of sim.ents){
-        if(!o.alive||o===pr.by||Math.hypot(o.x-pr.x,o.y-pr.y)>R+4)continue;
+        if(!o.alive||o===pr.by||dhypot(o.x-pr.x,o.y-pr.y)>R+4)continue;
         if(pr.k==='frost'&&o.frozeOnce)continue; // already frozen once this turn: bolt passes through
         if(invuln(o))continue; // dashing tier 2 Sprinter: shots pass through
         if(pr.k==='ranger'&&o.p===pr.p)continue; // arrows pass through teammates
@@ -510,7 +644,7 @@ function step(){
     if(m.dead)continue;
     if(m.arm>0){m.arm--;continue;}
     for(const o of sim.ents){
-      if(o.alive&&o!==m.by&&!invuln(o)&&Math.hypot(o.x-m.x,o.y-m.y)<R+6){m.dead=true;fx('boom',m.x,m.y,{c:COL[m.p],m:26});kill(o,m.by,'mine');break;}
+      if(o.alive&&o!==m.by&&!invuln(o)&&!shielded(o,m.p)&&dhypot(o.x-m.x,o.y-m.y)<R+6){m.dead=true;fx('boom',m.x,m.y,{c:COL[m.p],m:26});kill(o,m.by,'mine');break;}
     }
   }
   // crystals
@@ -518,24 +652,24 @@ function step(){
     if(k.scored)continue;
     if(k.carrier){
       const e=k.carrier;k.x=e.x;k.y=e.y;
-      if(Math.hypot(e.x-GOAL.x,e.y-GOAL.y)<GOAL.r){ // a carrier delivers everything it holds
+      if(dhypot(e.x-GOAL.x,e.y-GOAL.y)<GOAL.r){ // a carrier delivers everything it holds
         const i=sim.delivered++;
         k.scored=e.p;k.carrier=null;e.carry=e.carry.filter(c=>c!==k);k.x=GOAL.x+((i%4)-1.5)*13;k.y=GOAL.y+(((i/4)|0)-.5)*14+7;
         const pts=e.ch==='ninja'&&e.tier>=2?2:1; // tier 2 Ninja: double points
-        sim.score[e.p]+=pts;log(`${ename(e)} delivered the ${k.n} crystal${pts>1?' (worth 2)':''}`);fx('grab',GOAL.x,GOAL.y,{c:COL[e.p],m:36});
+        sim.score[e.p]+=pts;log(`${ename(e)} delivered the ${k.n} crystal${pts>1?' (worth 2)':''}`,'score');fx('grab',GOAL.x,GOAL.y,{c:COL[e.p],m:36});
       }
       continue;
     }
     if(k.drop>0){k.drop--;continue;}
     for(const e of sim.ents){
-      if(!e.alive||e.frozen>0||CH[e.ch].noCarry||Math.hypot(e.x-k.x,e.y-k.y)>=22)continue;
+      if(!e.alive||e.frozen>0||CH[e.ch].noCarry||dhypot(e.x-k.x,e.y-k.y)>=22)continue;
       k.carrier=e;e.carry.push(k);log(`${ename(e)} picked up the ${k.n} crystal`);fx('grab',k.x,k.y,{c:COL[e.p],m:24});break;
     }
   }
   tickFx();
   sim.t++;
   if(sim.endAt===null&&sim.ents.every(e=>!e.alive))sim.endAt=sim.t+45; // everyone knocked out
-  if(sim.t>=TICKS||(sim.endAt!==null&&sim.t>=sim.endAt))endRound();
+  if(sim.t>=TICKS||(sim.endAt!==null&&sim.t>=sim.endAt)){if(sim.replay)replayDone();else endRound();}
 }
 function tickFx(){for(const f of sim.fx)f.t++;sim.fx=sim.fx.filter(f=>f.t<f.m);}
 
@@ -550,7 +684,7 @@ function bfsFrom(c,r){
   return d;
 }
 function clearLine(x0,y0,x1,y1){
-  const d=Math.hypot(x1-x0,y1-y0),n=Math.ceil(d/8);
+  const d=dhypot(x1-x0,y1-y0),n=Math.ceil(d/8);
   for(let i=1;i<n;i++){const x=x0+(x1-x0)*i/n,y=y0+(y1-y0)*i/n;if(solid(Math.floor(x/T),Math.floor(y/T)))return false;}
   return true;
 }
@@ -558,39 +692,46 @@ function nearest(list,e){let b=null,bd=1e9;for(const o of list){const d=dist(o,e
 function dirTo(e,o){const dx=o.x-e.x,dy=o.y-e.y,ax=Math.abs(dx),ay=Math.abs(dy);return[ax>ay*0.4?Math.sign(dx):0,ay>ax*0.4?Math.sign(dy):0];}
 
 function aiInput(e,t){
+  if(e.ch==='sniper'){ // stationary: track the most valuable enemy, fire at carriers or after a wait
+    const foes=sim.ents.filter(o=>o.alive&&o.p!==e.p);
+    const tgt=nearest(foes.filter(o=>o.carry.length),e)||nearest(foes,e);
+    if(tgt)e.aiAim=aimByte(datan2(tgt.y-e.y,tgt.x-e.x));
+    const fire=tgt&&e.cd===0&&e.shots<(e.tier>=2?2:1)&&(tgt.carry.length||t>150&&Math.random()<.02);
+    return enc(0,0,!!fire);
+  }
   const s=e.ai||(e.ai={goal:null,field:null,until:0});
   const foes=sim.ents.filter(o=>o.alive&&o.p!==e.p), ch=e.ch;
   if(e.frozen===0&&e.cd===0&&Math.random()<0.3){
     if(ch==='frost'){
       for(const o of foes){
         if(ch==='frost'&&o.frozeOnce)continue;
-        const dx=o.x-e.x,dy=o.y-e.y,d=Math.hypot(dx,dy);if(d>440||d<1)continue;
-        const a=Math.atan2(dy,dx),k=Math.round(a/(Math.PI/4));
+        const dx=o.x-e.x,dy=o.y-e.y,d=dhypot(dx,dy);if(d>440||d<1)continue;
+        const a=datan2(dy,dx),k=Math.round(a/(Math.PI/4));
         if(Math.abs(a-k*Math.PI/4)*d<10&&clearLine(e.x,e.y,o.x,o.y))
-          return enc(Math.round(Math.cos(k*Math.PI/4)),Math.round(Math.sin(k*Math.PI/4)),true);
+          return enc(Math.round(dcos(k*Math.PI/4)),Math.round(dsin(k*Math.PI/4)),true);
       }
     }else if(ch==='ninja'){
       // turn so the target sits on the ninja's left, then swing
       const o=nearest(foes,e);if(o&&dist(o,e)<2*T+4){const d=dirTo(e,o);return enc(-d[1],d[0],true);}
     }else if(ch==='trapper'&&e.mines<maxMines(e)){
-      const nearGoal=Math.hypot(GOAL.x-e.x,GOAL.y-e.y)<110;
+      const nearGoal=dhypot(GOAL.x-e.x,GOAL.y-e.y)<110;
       const foeNear=foes.some(o=>dist(o,e)<80);
-      if((nearGoal||foeNear)&&!sim.mines.some(m=>!m.dead&&m.p===e.p&&Math.hypot(m.x-e.x,m.y-e.y)<50))return enc(0,0,true);
+      if((nearGoal||foeNear)&&!sim.mines.some(m=>!m.dead&&m.p===e.p&&dhypot(m.x-e.x,m.y-e.y)<50))return enc(0,0,true);
     }
   }
   if(t>=s.until||!s.field){
     s.until=t+15;
     const from=e.ch==='ghost'?null:bfsFrom(Math.floor(e.x/T),Math.floor(e.y/T));
-    const far=(x,y)=>from?from[Math.floor(y/T)*COLS+Math.floor(x/T)]:Math.hypot(x-e.x,y-e.y);
+    const far=(x,y)=>from?from[Math.floor(y/T)*COLS+Math.floor(x/T)]:dhypot(x-e.x,y-e.y);
     let best=null;
     const foeCarrier=nearest(foes.filter(o=>o.carry.length),e), o=nearest(foes,e);
-    const near=sim.crystals.find(k=>!k.scored&&!k.carrier&&Math.hypot(k.x-e.x,k.y-e.y)<4*T);
+    const near=sim.crystals.find(k=>!k.scored&&!k.carrier&&dhypot(k.x-e.x,k.y-e.y)<4*T);
     if(e.carry.length&&!(near&&!CH[ch].noCarry))best={x:GOAL.x,y:GOAL.y};
     else if(e.carry.length)best={x:near.x,y:near.y}; // grab a nearby extra crystal before delivering
     else if(ch==='trapper'){
       if(foeCarrier)best={x:foeCarrier.x,y:foeCarrier.y};
       else if(o&&dist(o,e)<160)best={x:o.x,y:o.y};
-      else best={x:GOAL.x+(e.p===1?-60:60),y:GOAL.y+(Math.sin(t/50)*70)};
+      else best={x:GOAL.x+(e.p===1?-60:60),y:GOAL.y+(dsin(t/50)*70)};
     }else{
       let bd=1e9;
       for(const k of sim.crystals){if(k.scored||k.carrier)continue;const d=far(k.x,k.y);if(d>=0&&d<bd){bd=d;best={x:k.x,y:k.y};}}
@@ -606,20 +747,22 @@ function aiInput(e,t){
     if(!best)best={x:GOAL.x,y:GOAL.y};
     s.goal=best;s.field=bfsFrom(Math.floor(best.x/T),Math.floor(best.y/T));
   }
-  s.seen=s.seen||[];CRYSTALS.forEach((c,j)=>{if(Math.hypot(c.x-e.x,c.y-e.y)<24)s.seen[j]=true;});
-  if(s.shadowGoal&&Math.hypot(s.shadowGoal.x-e.x,s.shadowGoal.y-e.y)<24){s.shadowDone=true;s.shadowGoal=null;s.until=0;}
+  s.seen=s.seen||[];CRYSTALS.forEach((c,j)=>{if(dhypot(c.x-e.x,c.y-e.y)<24)s.seen[j]=true;});
+  if(s.shadowGoal&&dhypot(s.shadowGoal.x-e.x,s.shadowGoal.y-e.y)<24){s.shadowDone=true;s.shadowGoal=null;s.until=0;}
   const g=s.goal,f=s.field,mc=Math.floor(e.x/T),mr=Math.floor(e.y/T);
   let tx=g.x,ty=g.y;const here=e.ch==='ghost'?0:f[mr*COLS+mc];
   if(here>1){let bn=null,bv=here;for(const[ax,ay]of N4){const nc=mc+ax,nr=mr+ay;if(solid(nc,nr))continue;const v=f[nr*COLS+nc];if(v>=0&&v<bv){bv=v;bn=[nc,nr];}}if(bn){tx=bn[0]*T+16;ty=bn[1]*T+16;}}
   const vx=tx-e.x,vy=ty-e.y,dx=Math.abs(vx)>2?Math.sign(vx):0,dy=Math.abs(vy)>2?Math.sign(vy):0;
-  if(ch==='ghost'&&e.tier>=2&&!e.dropped&&Math.hypot(GOAL.x-e.x,GOAL.y-e.y)<70)return enc(dx,dy,true); // guard the ring
-  if(ch==='sprinter'&&e.cd===0&&Math.hypot(g.x-e.x,g.y-e.y)>140&&Math.random()<0.04)return enc(dx,dy,true);
+  if(ch==='time'&&e.cd===0&&sim.ents.some(o=>o.alive&&!o.live&&o.p!==e.p&&(o.carry.length||dist(o,e)<180)))return enc(dx,dy,true);
+  if(ch==='ben'&&e.tier>=2&&!e.dropped&&dhypot(GOAL.x-e.x,GOAL.y-e.y)<70)return enc(dx,dy,true); // shield the ring
+  if(ch==='ghost'&&e.tier>=2&&!e.dropped&&dhypot(GOAL.x-e.x,GOAL.y-e.y)<70)return enc(dx,dy,true); // guard the ring
+  if(ch==='sprinter'&&e.cd===0&&dhypot(g.x-e.x,g.y-e.y)>140&&Math.random()<0.04)return enc(dx,dy,true);
   if(ch==='ranger'&&e.frozen===0&&e.tier>=2){ // instant shots: fire whenever a target lines up
     if(e.cd===0)for(const o of foes){
-      const ox=o.x-e.x,oy=o.y-e.y,d=Math.hypot(ox,oy);if(d>460||d<1)continue;
-      const a=Math.atan2(oy,ox),k=Math.round(a/(Math.PI/4));
+      const ox=o.x-e.x,oy=o.y-e.y,d=dhypot(ox,oy);if(d>460||d<1)continue;
+      const a=datan2(oy,ox),k=Math.round(a/(Math.PI/4));
       if(Math.abs(a-k*Math.PI/4)*d<10&&clearLine(e.x,e.y,o.x,o.y))
-        return enc(Math.round(Math.cos(k*Math.PI/4)),Math.round(Math.sin(k*Math.PI/4)),true);
+        return enc(Math.round(dcos(k*Math.PI/4)),Math.round(dsin(k*Math.PI/4)),true);
     }
     return enc(dx,dy,false);
   }
@@ -628,10 +771,10 @@ function aiInput(e,t){
     const inSight=foes.some(o=>dist(o,e)<440&&clearLine(e.x,e.y,o.x,o.y));
     if(e.charge>=CHARGE_MAX){
       for(const o of foes){
-        const ox=o.x-e.x,oy=o.y-e.y,d=Math.hypot(ox,oy);if(d>460||d<1)continue;
-        const a=Math.atan2(oy,ox),k=Math.round(a/(Math.PI/4));
+        const ox=o.x-e.x,oy=o.y-e.y,d=dhypot(ox,oy);if(d>460||d<1)continue;
+        const a=datan2(oy,ox),k=Math.round(a/(Math.PI/4));
         if(Math.abs(a-k*Math.PI/4)*d<10&&clearLine(e.x,e.y,o.x,o.y))
-          return enc(Math.round(Math.cos(k*Math.PI/4)),Math.round(Math.sin(k*Math.PI/4)),false,false);
+          return enc(Math.round(dcos(k*Math.PI/4)),Math.round(dsin(k*Math.PI/4)),false,false);
       }
       return enc(dx,dy,false,true);
     }
@@ -657,6 +800,131 @@ const active=()=>G.half===0?first(G.round):3-first(G.round);
 const cpuTurn=()=>G&&G.mode==='cpu'&&active()===2;
 const showTouch=()=>{const on=state==='play'&&!cpuTurn();tl.hidden=!on;if(!on)releaseTouch();};
 
+/* ---------- online play (Firebase) ----------
+   Only active in the published web/phone builds, which load the Firebase SDK and FIREBASE_CONFIG.
+   A match is one Firestore document: players, whose move it is, and the whole game state,
+   including every turn's recorded inputs. The next player's device replays those recordings. */
+const ONLINE_OK=()=>!!(window.firebase&&window.FIREBASE_CONFIG&&window.FIREBASE_CONFIG.apiKey);
+let fb=null,myUid=null,lobbyUnsub=null;
+const b64=u8=>{let s='';for(let i=0;i<u8.length;i++)s+=String.fromCharCode(u8[i]);return btoa(s);};
+const unb64=str=>Uint8Array.from(atob(str),c=>c.charCodeAt(0));
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function myName(){try{return localStorage.getItem('ce-name')||'';}catch(e){return '';}}
+function setMyName(n){try{localStorage.setItem('ce-name',n);}catch(e){}}
+async function onlineInit(){
+  if(fb)return fb;
+  firebase.initializeApp(window.FIREBASE_CONFIG);
+  const auth=firebase.auth();
+  if(!auth.currentUser)await auth.signInAnonymously();
+  myUid=auth.currentUser.uid;
+  fb={db:firebase.firestore(),auth};return fb;
+}
+function packG(){
+  return JSON.stringify({rounds:G.rounds,round:G.round,half:G.half,picks:G.picks,tiers:G.tiers,roundRes:G.roundRes,bonus:G.bonus,total:G.total,spent:G.spent,
+    turns:G.turns.map(t=>({p:t.p,r:t.r,ch:t.ch,tier:t.tier,rec:b64(t.rec),aim:b64(t.aimRec)}))});
+}
+function unpackG(str,me,id,names){
+  const o=JSON.parse(str);
+  G={mode:'online',me,matchId:id,names,...o,turns:o.turns.map(t=>({p:t.p,r:t.r,ch:t.ch,tier:t.tier,rec:unb64(t.rec),aimRec:unb64(t.aim)}))};
+}
+function rebuildPrev(){ // re-run the last turn so its routes can be drawn and replayed
+  prevSim=null;if(!G.turns.length)return;
+  const saved=sim;sim=buildReplay();let n=0;while(!sim.done&&n++<TICKS+5)step();prevSim=sim;sim=saved;
+  $('replayBar').hidden=true;
+}
+function newCode(){const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<6;i++)c+=A[Math.floor(Math.random()*A.length)];return c;}
+
+async function showLobby(msg){
+  state='lobby';G=null;sim=null;view=null;prevSim=null;showTouch();
+  showOv(`<div class="panel wide"><p class="eyebrow">Online</p><h2>Connecting…</h2></div>`);
+  try{await onlineInit();}catch(e){showOv(`<div class="panel"><p class="eyebrow">Online</p><h2>Couldn't connect.</h2><p class="sub">${esc(e.message)}</p><div class="row"><button class="btn" id="bk" type="button">Back</button></div></div>`);$('bk').onclick=showSetup;return;}
+  showOv(`<div class="panel wide">
+    <p class="eyebrow">Online · play your turn whenever you like</p>
+    <h2>Your matches</h2>
+    ${msg?`<p class="note">${msg}</p>`:''}
+    <div class="opts">
+      <div class="opt"><span>Your name</span><input id="nm" class="field" maxlength="16" placeholder="Name" value="${esc(myName())}"></div>
+      <div class="opt"><span>New match</span><div class="row"><button class="btn" id="new3" type="button">3 rounds</button><button class="btn" id="new5" type="button">5 rounds</button></div></div>
+      <div class="opt"><span>Join a friend</span><div class="row"><input id="jc" class="field" maxlength="6" placeholder="Code" style="text-transform:uppercase;width:7em"><button class="btn ghost" id="join" type="button">Join</button></div></div>
+    </div>
+    <div id="mlist" class="mlist"><p class="sub">Loading…</p></div>
+    <div class="row"><button class="btn ghost" id="bk" type="button">Back</button></div>
+  </div>`);
+  const nameNow=()=>{const n=$('nm').value.trim().slice(0,16);if(n)setMyName(n);return n||'Player';};
+  $('nm').onchange=nameNow;
+  $('bk').onclick=()=>{if(lobbyUnsub){lobbyUnsub();lobbyUnsub=null;}showSetup();};
+  const create=async rounds=>{
+    const code=newCode();
+    G={mode:'online',rounds,round:0,half:0,picks:{1:[],2:[]},tiers:{1:[],2:[]},turns:[],roundRes:[],bonus:[],total:{1:START_CRYSTALS,2:START_CRYSTALS},spent:{1:0,2:0}};
+    await fb.db.collection('matches').add({code,status:'waiting',players:[myUid],names:[nameNow()],toMoveSlot:1,turnCount:0,rounds,state:packG(),
+      createdAt:firebase.firestore.FieldValue.serverTimestamp(),updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+    showLobby(`Match created. Send your friend the code <b class="code">${code}</b>. You can play your first turn now.`);
+  };
+  $('new3').onclick=()=>create(3);$('new5').onclick=()=>create(5);
+  $('join').onclick=async()=>{
+    const code=$('jc').value.trim().toUpperCase();if(!code)return;
+    try{
+      const q=await fb.db.collection('matches').where('code','==',code).where('status','==','waiting').limit(1).get();
+      if(q.empty){showLobby(`No open match with code <b>${esc(code)}</b>. Check the code, or it may already be full.`);return;}
+      const ref=q.docs[0].ref;
+      await fb.db.runTransaction(async tx=>{
+        const d=(await tx.get(ref)).data();
+        if(d.status!=='waiting'||d.players.length!==1)throw new Error('That match is already full.');
+        if(d.players[0]===myUid)throw new Error('That is your own match. Send the code to a friend.');
+        tx.update(ref,{players:[d.players[0],myUid],names:[d.names[0],nameNow()],status:'active',updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+      });
+      showLobby('Joined! It appears in your list below.');
+    }catch(e){showLobby(esc(e.message));}
+  };
+  if(lobbyUnsub)lobbyUnsub();
+  lobbyUnsub=fb.db.collection('matches').where('players','array-contains',myUid).onSnapshot(snap=>{
+    if(state!=='lobby'||!$('mlist'))return;
+    const rows=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.updatedAt?.seconds||0)-(a.updatedAt?.seconds||0));
+    if(!rows.length){$('mlist').innerHTML='<p class="sub">No matches yet. Start one and send the code to a friend.</p>';return;}
+    $('mlist').innerHTML=rows.map(m=>{
+      const me=m.players[0]===myUid?1:2,opp=m.names[2-me]||'Waiting for opponent';
+      const st=JSON.parse(m.state),done=m.status==='done',mine=!done&&m.toMoveSlot===me;
+      const status=done?'Finished':mine?'<b class="yt">Your turn</b>':`${esc(m.names[m.toMoveSlot-1]||'Opponent')}'s turn`;
+      return `<button type="button" class="mrow" data-id="${m.id}"><span class="${me===1?'p1c':'p2c'}">${NAME[me]}</span>
+        <span>vs ${esc(opp)}${m.status==='waiting'?` · code <b class="code">${m.code}</b>`:''}</span>
+        <span class="sub">Round ${Math.min(st.round+1,st.rounds)}/${st.rounds}</span><span>${status}</span></button>`;
+    }).join('');
+    $('mlist').querySelectorAll('.mrow').forEach(b=>b.onclick=()=>openMatch(b.dataset.id));
+  },err=>{if($('mlist'))$('mlist').innerHTML=`<p class="sub">Couldn't load matches: ${esc(err.message)}</p>`;});
+}
+
+async function openMatch(id){
+  if(lobbyUnsub){lobbyUnsub();lobbyUnsub=null;}
+  const d=(await fb.db.collection('matches').doc(id).get()).data();
+  const me=d.players[0]===myUid?1:2;
+  unpackG(d.state,me,id,d.names);G.turnCount=d.turnCount;
+  $('n2').textContent='Cobalt';
+  rebuildPrev();view=prevSim;
+  if(d.status==='done'){showOver();return;}
+  if(d.toMoveSlot!==me){ // their move: offer the latest replay while waiting
+    state='waiting';
+    showOv(`<div class="panel"><p class="eyebrow">Round ${G.round+1} of ${G.rounds}</p>
+      <h2>Waiting for ${esc(d.names[d.toMoveSlot-1]||'your opponent')}.</h2>
+      <p class="sub">You're <span class="${me===1?'p1c':'p2c'}">${NAME[me]}</span>. Come back when it's your turn.</p>
+      <div class="row">${G.turns.length?'<button class="btn ghost" id="watch" type="button">▶ Watch last turn</button>':''}<button class="btn" id="bk" type="button">Back to matches</button></div></div>`);
+    if($('watch'))$('watch').onclick=()=>startReplay('waiting');
+    $('bk').onclick=()=>showLobby();return;
+  }
+  showDraft();
+}
+
+async function submitTurn(last){ // called at the end of your online turn
+  const ref=fb.db.collection('matches').doc(G.matchId);
+  const expected=G.turnCount;
+  await fb.db.runTransaction(async tx=>{
+    const d=(await tx.get(ref)).data();
+    if(d.turnCount!==expected)throw new Error('This match changed on another device. Reopen it from your matches.');
+    tx.update(ref,{state:packG(),turnCount:expected+1,toMoveSlot:last?d.toMoveSlot:active(),status:last?'done':d.status,
+      updatedAt:firebase.firestore.FieldValue.serverTimestamp()});
+  });
+  G.turnCount=expected+1;
+}
+
 function showSetup(){
   state='setup';G=null;sim=null;view=null;prevSim=null;showTouch();
   showOv(`<div class="panel">
@@ -668,9 +936,10 @@ function showSetup(){
       <div class="opt"><span>Opponent</span><div class="seg" data-k="mode"><button type="button" data-v="cpu">Computer</button><button type="button" data-v="2p">Second player</button></div></div>
       <div class="opt"><span>Rounds</span><div class="seg" data-k="rounds"><button type="button" data-v="3">3</button><button type="button" data-v="5">5</button></div></div>
     </div>
-    <div class="row"><button class="btn" id="go" type="button">Start round 1</button><button class="btn ghost" id="how" type="button">How to play</button></div>
+    <div class="row"><button class="btn" id="go" type="button">Start round 1</button>${ONLINE_OK()?'<button class="btn ghost" id="online" type="button">Play online</button>':''}<button class="btn ghost" id="how" type="button">How to play</button></div>
   </div>`);
   $('how').onclick=showHowTo;
+  if($('online'))$('online').onclick=()=>showLobby();
   ov.querySelectorAll('.seg').forEach(seg=>{
     const k=seg.dataset.k,sync=()=>seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v==String(opts[k]))));
     seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{opts[k]=k==='rounds'?+b.dataset.v:b.dataset.v;sync();});
@@ -710,13 +979,14 @@ function showDraft(){
     return `<button type="button" class="card" style="--pc:${COL[p]}" data-k="${k}" ${ui>=0?'disabled':''}>
       <span class="hd"><img class="spr" src="${portrait(k,p)}" alt=""><span><h3>${c.name}</h3><span class="role">${c.role}</span></span></span>
       <p>${c.text}</p>
-      <span class="stats"><span>Speed <b>${(spd(k)*60/T).toFixed(1)}</b> tiles/s</span>${c.cd?`<span>Reload <b>${(c.cd/60).toFixed(1)}</b>s</span>`:c.chargeText?`<span>Draw <b>${(CHARGE_MAX/60).toFixed(1)}</b>s</span><span>No reload</span>`:'<span>Passive ability</span>'}${c.noCarry?'<span><b>Can’t carry</b></span>':''}</span>
+      <span class="stats">${c.speed?`<span>Speed <b>${(spd(k)*60/T).toFixed(1)}</b> tiles/s</span>`:'<span><b>Can’t move</b></span>'}${c.shots?`<span>Shots <b>${c.shots}</b> per turn</span>`:c.cd?`<span>Reload <b>${(c.cd/60).toFixed(1)}</b>s</span>`:c.chargeText?`<span>Draw <b>${(CHARGE_MAX/60).toFixed(1)}</b>s</span><span>No reload</span>`:'<span>Passive ability</span>'}${c.noCarry?'<span><b>Can’t carry</b></span>':''}</span>
       ${ui>=0?`<span class="used">Used in round ${ui+1}</span>`:''}
     </button>`;}).join('');
   showOv(`<div class="panel wide">
     <p class="eyebrow">Round ${G.round+1} of ${G.rounds} · ${G.half===0?'First':'Second'} turn</p>
-    <h2><span class="${p===1?'p1c':'p2c'}">${NAME[p]}</span>, choose your character</h2>
+    <h2><span class="${p===1?'p1c':'p2c'}">${G.mode==='online'?esc(myName()||NAME[p]):NAME[p]}</span>, choose your character</h2>${G.mode==='online'&&G.names?`<p class="sub">Online match vs ${esc(G.names[2-p]||'opponent')}. You're ${NAME[p]}.</p>`:''}
     <p class="sub">${G.turns.length?`You'll face ${G.turns.length} echo${G.turns.length===1?'':'es'} in turn order: ${echoList()}.`:'No echoes yet. Everything you do this turn replays on every later turn.'}${bonusText(G.bonus[G.round])?` This round has ${bonusText(G.bonus[G.round])}.`:''}</p>
+    ${G.turns.length?'<div class="row"><button class="btn ghost" id="watch" type="button">▶ Watch last turn</button></div>':''}
     <div class="cards">${cards}</div>
     <div class="upg" id="upg"><p class="bank">Select a character to see its upgrades.</p></div>
   </div>`);
@@ -732,6 +1002,7 @@ function showDraft(){
     $('upg').querySelectorAll('.tier:not(:disabled)').forEach(b=>b.onclick=()=>{tier=+b.dataset.t;renderUpg();});
     $('play').onclick=()=>buyAndStart(p,sel,tier);
   };
+  if($('watch'))$('watch').onclick=()=>startReplay('draft');
   ov.querySelectorAll('.card:not(:disabled)').forEach(b=>b.onclick=()=>{
     sel=b.dataset.k;tier=0;
     ov.querySelectorAll('.card').forEach(x=>x.classList.toggle('sel',x===b));
@@ -743,19 +1014,46 @@ function showDraft(){
 function startRound(){
   sim=buildSim();view=sim;actQ[1]=false;
   hideOv();state='play';showTouch();
+  $('readyBar').hidden=!G.turns.length;
+}
+let startedAt=0;
+function startTurn(){ // the turn begins on a tap, click or key press
+  if(state!=='play'||!sim||sim.phase!=='ready')return false;
+  sim.phase='run';actQ[1]=false;$('readyBar').hidden=true;startedAt=performance.now();return true;
+}
+
+/* ---------- replay of the last turn ---------- */
+let replaySaved=null,replaySpeed=1;
+function startReplay(from){
+  if(!G||!G.turns.length)return;
+  replaySaved={sim,view,from};
+  sim=buildReplay();view=sim;state='replay';replaySpeed=1;
+  hideOv();showTouch();$('readyBar').hidden=true;
+  const tn=sim.turn;
+  $('rpLabel').innerHTML=`Replay · <span class="${tn.p===1?'p1c':'p2c'}">${NAME[tn.p]}'s ${CH[tn.ch].name}${tierTag(tn.tier)}</span>, round ${tn.r+1}`;
+  $('rpSpeed').textContent='2× speed';$('rpAgain').hidden=true;$('replayBar').hidden=false;
+}
+function replayDone(){sim.done=true;$('rpAgain').hidden=false;$('rpLabel').innerHTML+=' · finished';}
+function endReplay(){
+  if(state!=='replay')return;
+  $('replayBar').hidden=true;sim=replaySaved.sim;view=replaySaved.view;
+  if(replaySaved.from==='draft')showDraft();
+  else if(replaySaved.from==='waiting')openMatch(G.matchId);
+  else{state='play';showTouch();$('readyBar').hidden=false;}
 }
 
 function endRound(){
   state='summary';showTouch();
   const live=sim.ents.find(e=>e.live), p=live.p, sc=sim.score, closing=G.half===1;
-  G.turns.push({p,r:G.round,ch:live.ch,rec:live.rec,tier:live.tier});
+  G.turns.push({p,r:G.round,ch:live.ch,rec:live.rec,tier:live.tier,aimRec:live.aimRec});
   if(closing){G.total[1]+=sc[1];G.total[2]+=sc[2];G.roundRes[G.round]={1:sc[1],2:sc[2],k1:sim.kills[1],k2:sim.kills[2]};}
   const nb=closing&&G.round+1<G.rounds&&G.round+1>=2?computeBonus(G.round+1):null; // rounds 3-5 only
   prevSim=sim;
   const last=G.round+1>=G.rounds&&G.half===1;
   let nextLabel='See final result';
   if(!last){const nr=G.half===1?G.round+1:G.round,np=G.half===1?first(nr):3-p;nextLabel=`${NAME[np]}'s turn${G.half===1?` · Round ${nr+1}`:''}`;}
-  const items=sim.log.length?sim.log.map(([t,s])=>`<li><time>${stamp(t)}</time><span>${s}</span></li>`).join(''):'<li><time></time><span>Nobody picked up a crystal.</span></li>';
+  const shown=sim.log.filter(l=>l[2]!=='info'); // only deliveries and knockouts
+  const items=shown.length?shown.map(([t,s])=>`<li><time>${stamp(t)}</time><span>${s}</span></li>`).join(''):'<li><time></time><span>No crystals delivered and no knockouts.</span></li>';
   showOv(`<div class="panel">
     <p class="eyebrow">Round ${G.round+1} of ${G.rounds} · ${NAME[p]}'s turn complete</p>
     <h2>${closing?`Round ${G.round+1} banked: `:'Provisional: '}<span class="p1c">${NAME[1]} ${sc[1]}</span> · <span class="p2c">${NAME[2]} ${sc[2]}</span></h2>
@@ -770,6 +1068,13 @@ function endRound(){
     if(G.half===0)G.half=1;else{G.half=0;G.round++;}
     showDraft();
   };
+  if(G.mode==='online'){
+    if(!last){if(G.half===0)G.half=1;else{G.half=0;G.round++;}}
+    const btn=$('nx');btn.disabled=true;btn.textContent='Sending your turn…';
+    const done=()=>{btn.disabled=false;btn.textContent=last?'See final result':'Back to matches';btn.onclick=()=>last?showOver():showLobby('Turn sent.');};
+    submitTurn(last).then(done).catch(e=>{btn.disabled=false;btn.textContent='Try sending again';btn.onclick=()=>{btn.disabled=true;btn.textContent='Sending your turn…';submitTurn(last).then(done).catch(err=>{btn.disabled=false;btn.textContent='Try sending again';alertLine(err.message);});};alertLine(e.message);});
+    function alertLine(m){let n=$('sendErr');if(!n){n=document.createElement('p');n.id='sendErr';n.className='note';btn.before(n);}n.textContent="Couldn't send: "+m;}
+  }
 }
 
 function showOver(){
@@ -792,9 +1097,9 @@ function showOver(){
     ${spentNote}
     <div class="tbl"><table><thead><tr><th>Round</th><th class="p1c">${NAME[1]}</th><th></th><th class="p2c">${NAME[2]}</th><th></th></tr></thead>
     <tbody>${rows}<tr><td><b>Total</b></td><td>${ka} knockouts</td><td class="n">${a}</td><td>${kb} knockouts</td><td class="n">${b}</td></tr></tbody></table></div>
-    <div class="row"><button class="btn" id="again" type="button">Play again</button></div>
+    <div class="row"><button class="btn" id="again" type="button">${G.mode==='online'?'Back to matches':'Play again'}</button></div>
   </div>`);
-  $('again').onclick=showSetup;
+  $('again').onclick=G.mode==='online'?()=>showLobby():showSetup;
 }
 
 function pause(){
@@ -812,7 +1117,8 @@ addEventListener('keydown',ev=>{
   if(state==='play'&&['arrowup','arrowdown','arrowleft','arrowright',' ','enter','/'].includes(k))ev.preventDefault();
   keys[k]=true;
   if(ev.repeat)return;
-  if(k==='escape'){if(state==='play')pause();else if(state==='paused')resume();return;}
+  if(k==='escape'){if(state==='replay')endReplay();else if(state==='play')pause();else if(state==='paused')resume();return;}
+  if(state==='play'&&sim&&sim.phase==='ready'){if([' ','enter','f'].includes(k))startTurn();return;}
   if(state!=='play')return;
   if(['f',' ','enter','/'].includes(k)&&!cpuTurn())actQ[1]=true;
 });
@@ -826,13 +1132,15 @@ const tl=$('touchLayer'),ring=$('ring'),knob=$('knob'),tap=$('tap');
 let moveId=null,actId=null,ox=0,oy=0;
 function stickTo(x,y){
   const dx=x-ox,dy=y-oy,d=Math.hypot(dx,dy),m=Math.min(d,44);
+  touchVec[0]=d?dx/d:0;touchVec[1]=d?dy/d:0; // raw direction for the Sniper's free aim
   knob.style.transform=d?`translate(${dx/d*m}px,${dy/d*m}px)`:'';
   if(d<12){touchDir[0]=touchDir[1]=0;return;}
   const a=Math.round(Math.atan2(dy,dx)/(Math.PI/4))*Math.PI/4;
   touchDir[0]=Math.round(Math.cos(a));touchDir[1]=Math.round(Math.sin(a));
 }
 tl.addEventListener('pointerdown',ev=>{
-  ev.preventDefault();try{tl.setPointerCapture(ev.pointerId);}catch(e){}
+  ev.preventDefault();if(startTurn())return; // first tap starts the turn
+  try{tl.setPointerCapture(ev.pointerId);}catch(e){}
   if(ev.clientX<innerWidth/2){
     if(moveId!==null)return;
     moveId=ev.pointerId;ox=ev.clientX;oy=ev.clientY;
@@ -845,17 +1153,19 @@ tl.addEventListener('pointerdown',ev=>{
 });
 tl.addEventListener('pointermove',ev=>{if(ev.pointerId===moveId)stickTo(ev.clientX,ev.clientY);});
 function touchEnd(ev){
-  if(ev.pointerId===moveId){moveId=null;touchDir[0]=touchDir[1]=0;ring.hidden=true;}
+  if(ev.pointerId===moveId){moveId=null;touchDir[0]=touchDir[1]=0;touchVec[0]=touchVec[1]=0;ring.hidden=true;}
   if(ev.pointerId===actId){actId=null;touchHeld=false;tap.hidden=true;}
 }
 tl.addEventListener('pointerup',touchEnd);tl.addEventListener('pointercancel',touchEnd);
-function releaseTouch(){moveId=actId=null;touchHeld=false;touchDir[0]=touchDir[1]=0;ring.hidden=true;tap.hidden=true;}
+function releaseTouch(){moveId=actId=null;touchHeld=false;touchDir[0]=touchDir[1]=0;touchVec[0]=touchVec[1]=0;ring.hidden=true;tap.hidden=true;}
 
 /* ---------- rendering ---------- */
 const cv=$('cv'),ctx=cv.getContext('2d');
+cv.addEventListener('mousemove',ev=>{const r=cv.getBoundingClientRect();mouseAim={x:(ev.clientX-r.left)/r.width*W,y:(ev.clientY-r.top)/r.height*H};});
+cv.addEventListener('mousedown',ev=>{if(startTurn()||performance.now()-startedAt<300)return;if(state==='play'&&!cpuTurn()&&sim&&sim.ents.some(e=>e.live&&e.ch==='sniper'))actQ[1]=true;}); // click to fire
 const DPR=Math.min(2,window.devicePixelRatio||1);
 cv.width=W*DPR;cv.height=H*DPR;ctx.setTransform(DPR,0,0,DPR,0,0);
-const IDLE={grid:BASE,ents:[],spectres:[],proj:[],mines:[],fx:[],crystals:CRYSTALS.map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0}))};
+const IDLE={grid:BASE,ents:[],spectres:[],shields:[],proj:[],mines:[],fx:[],crystals:CRYSTALS.map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0}))};
 let clock=0;
 const RM=matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -880,7 +1190,7 @@ const SPRITES={
     spriteShadow(ctx);
     // headband tails streaming behind
     ctx.strokeStyle=COL[p];ctx.lineWidth=2;ctx.lineCap='round';
-    const w=Math.sin(t/90)*1.5;
+    const w=dsin(t/90)*1.5;
     ctx.beginPath();ctx.moveTo(-4,-1);ctx.quadraticCurveTo(-9,-3+w,-14,-2-w);ctx.stroke();
     ctx.beginPath();ctx.moveTo(-4,1);ctx.quadraticCurveTo(-9,3-w,-13,5+w);ctx.stroke();
     // katana along the left side (blade side)
@@ -915,7 +1225,7 @@ const SPRITES={
     const g=ctx.createRadialGradient(0,0,2,0,0,14);g.addColorStop(0,COL[p]+'55');g.addColorStop(1,COL[p]+'00');
     ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,14,0,Math.PI*2);ctx.fill();
     // round head trailing a wispy tail
-    const k=t/120,wy=Math.sin(k)*2.5;
+    const k=t/120,wy=dsin(k)*2.5;
     ctx.beginPath();ctx.moveTo(1,-7.5);
     ctx.bezierCurveTo(-5,-7.5,-8,-2+wy*.4,-14,wy);
     ctx.bezierCurveTo(-8,2+wy*.4,-5,7.5,1,7.5);
@@ -930,10 +1240,10 @@ const SPRITES={
     ctx.strokeStyle=COL[p]+'99';ctx.lineWidth=1.2;ctx.lineCap='round';
     for(const y of [-6,0,6]){ctx.beginPath();ctx.moveTo(-11,y);ctx.lineTo(-15-(y===0?3:0),y);ctx.stroke();}
     // scarf trailing
-    const w=Math.sin(t/70)*2;
+    const w=dsin(t/70)*2;
     ctx.fillStyle=TEAM_LIGHT[p];ctx.beginPath();ctx.moveTo(-2,-2);ctx.quadraticCurveTo(-9,-1+w,-13,2+w);ctx.lineTo(-11,4+w);ctx.quadraticCurveTo(-7,3,-2,2);ctx.fill();
     // pumping arms
-    const s=Math.sin(t/60)*3;
+    const s=dsin(t/60)*3;
     blob(ctx,1+s,-7.5,2.2,2.2,COL[p],'#0c0f11',.8);blob(ctx,1-s,7.5,2.2,2.2,COL[p],'#0c0f11',.8);
     // slim body + head with swept hair
     blob(ctx,-1,0,5.5,7,COL[p],'#0c0f11',1);
@@ -955,11 +1265,54 @@ const SPRITES={
     // goggles peeking under the brim
     ctx.fillStyle='#9fe6ff';blob(ctx,9,-2.4,1.3,1.3,'#9fe6ff','#0c0f11',.6);blob(ctx,9,2.4,1.3,1.3,'#9fe6ff','#0c0f11',.6);
   },
+  ben(ctx,p,t){
+    spriteShadow(ctx);
+    // steel pauldrons + tabard in team colour
+    blob(ctx,-1,0,7,10,'#8d99a3','#0c0f11',1);
+    blob(ctx,-1,0,5,7.5,COL[p],'#0c0f11',1);
+    // helmet with a crest
+    blob(ctx,0,0,5.2,5.2,'#b9c3cb','#0c0f11',1);
+    ctx.fillStyle=TEAM_LIGHT[p];ctx.fillRect(-5,-1,8,2);
+    ctx.fillStyle='#2a3036';ctx.fillRect(3.2,-2.4,1.4,4.8); // visor slit
+    // big round shield held out front
+    ctx.save();ctx.translate(9,0);
+    blob(ctx,0,0,3.4,9,'#6f7b85','#0c0f11',1);
+    blob(ctx,.6,0,2.4,7.4,TEAM_DEEP[p]);
+    ctx.fillStyle='#e8edf1';blob(ctx,1,0,1.3,1.8,'#e8edf1');
+    ctx.restore();
+  },
+  sniper(ctx,p,t){
+    spriteShadow(ctx);
+    // long rifle pointing forward, scope on top
+    ctx.strokeStyle='#2b2f33';ctx.lineWidth=2.4;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-3,1.5);ctx.lineTo(17,1.5);ctx.stroke();
+    ctx.strokeStyle='#5b4330';ctx.lineWidth=3.2;ctx.beginPath();ctx.moveTo(-6,2);ctx.lineTo(2,1.6);ctx.stroke();
+    ctx.fillStyle='#1b1f22';ctx.fillRect(3,-1.8,6,2.4);
+    ctx.fillStyle=Math.floor(t/700)%3===0?'#e9f6ff':'#6fb3ff';ctx.fillRect(8.4,-1.5,1.2,1.8); // scope glint
+    // hooded ghillie cloak in team colour, arms along the rifle
+    blob(ctx,-2,0,7,9,TEAM_DEEP[p],'#0c0f11',1);
+    ctx.strokeStyle=COL[p];ctx.lineWidth=1;for(let i=-2;i<=2;i++){ctx.beginPath();ctx.moveTo(-6,i*3.2);ctx.lineTo(-9,i*3.6);ctx.stroke();}
+    blob(ctx,0,0,5,5,COL[p],'#0c0f11',1);
+    blob(ctx,4,2.5,1.8,1.8,'#e9c7a0','#0c0f11',.6);
+  },
+  time(ctx,p,t){
+    spriteShadow(ctx);
+    // brass gear on the back, slowly turning
+    ctx.save();ctx.translate(-8,0);ctx.rotate(t/900);ctx.fillStyle='#b8893a';
+    for(let i=0;i<8;i++){ctx.rotate(Math.PI/4);ctx.fillRect(-1,-5.6,2,2.2);}
+    blob(ctx,0,0,4,4,'#b8893a','#0c0f11',.8);blob(ctx,0,0,1.4,1.4,'#3a2a14');ctx.restore();
+    // long coat + hood
+    blob(ctx,-1,0,7,9,TEAM_DEEP[p],'#0c0f11',1);
+    blob(ctx,1,0,5.4,5.4,COL[p],'#0c0f11',1);
+    // pocket watch held out front on a chain
+    ctx.strokeStyle='#d9b45a';ctx.lineWidth=.8;ctx.beginPath();ctx.moveTo(3,3);ctx.quadraticCurveTo(7,6,9.5,3.5);ctx.stroke();
+    blob(ctx,10,2,3.4,3.4,'#f3ead2','#9a7a30',1.2);
+    ctx.strokeStyle='#2a2216';ctx.lineWidth=.8;ctx.beginPath();ctx.moveTo(10,2);ctx.lineTo(10+dcos(t/400)*2.4,2+dsin(t/400)*2.4);ctx.moveTo(10,2);ctx.lineTo(10,0.4);ctx.stroke();
+  },
   frost(ctx,p,t){
     spriteShadow(ctx);
     // frost motes circling
     ctx.fillStyle='#d8f4ff';
-    for(let i=0;i<3;i++){const a=t/500+i*2.1,x=Math.cos(a)*12,y=Math.sin(a)*12;ctx.beginPath();ctx.moveTo(x,y-1.6);ctx.lineTo(x+1,y);ctx.lineTo(x,y+1.6);ctx.lineTo(x-1,y);ctx.fill();}
+    for(let i=0;i<3;i++){const a=t/500+i*2.1,x=dcos(a)*12,y=dsin(a)*12;ctx.beginPath();ctx.moveTo(x,y-1.6);ctx.lineTo(x+1,y);ctx.lineTo(x,y+1.6);ctx.lineTo(x-1,y);ctx.fill();}
     // robe with pale trim
     blob(ctx,-1,0,8,9.5,COL[p],'#0c0f11',1);
     ctx.strokeStyle='#e6f7ff';ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(-1,0,6.2,7.8,0,Math.PI*.6,Math.PI*1.4);ctx.stroke();
@@ -995,7 +1348,7 @@ function drawEnt(e){
     ctx.restore();return;
   }
   if(!e.alive){ // knocked out: faded figure with an X
-    ctx.save();ctx.globalAlpha=.25;ctx.rotate(Math.atan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);drawSprite(ctx,e.ch,e.p,0);ctx.restore();
+    ctx.save();ctx.globalAlpha=.25;ctx.rotate(datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);drawSprite(ctx,e.ch,e.p,0);ctx.restore();
     ctx.globalAlpha=.5;ctx.strokeStyle=c;ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(0,0,R-2,0,Math.PI*2);ctx.stroke();
     ctx.beginPath();ctx.moveTo(-6,-6);ctx.lineTo(6,6);ctx.moveTo(6,-6);ctx.lineTo(-6,6);ctx.stroke();
@@ -1005,7 +1358,7 @@ function drawEnt(e){
   // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
   ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
   ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
-  ctx.save();ctx.rotate(Math.atan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
+  ctx.save();ctx.rotate(e.ch==='sniper'?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
   drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
   ctx.restore();
   if(e.charge>=0){ // bow charge meter
@@ -1014,6 +1367,11 @@ function drawEnt(e){
     ctx.beginPath();ctx.arc(0,0,R+5,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(.02,f));ctx.stroke();ctx.shadowBlur=0;
   }
   if(!e.live){ctx.setLineDash([3,3]);ctx.strokeStyle='#e7eee9';ctx.lineWidth=1;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
+  if(e.stopped>0){ // time-stopped: grey veil and a ticking clock hand
+    ctx.save();ctx.globalAlpha=.8;ctx.fillStyle='rgba(200,205,230,.28)';ctx.strokeStyle='#d8dcf0';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.arc(0,0,R+4,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,0);const a=-Math.PI/2+(e.stopped/60)*Math.PI*2;ctx.lineTo(dcos(a)*(R+2),dsin(a)*(R+2));ctx.stroke();ctx.restore();
+  }
   if(e.frozen>0){
     ctx.globalAlpha=.85;ctx.fillStyle='rgba(191,233,255,.35)';ctx.strokeStyle='#bfe9ff';ctx.lineWidth=2;
     ctx.beginPath();ctx.arc(0,0,R+4,0,Math.PI*2);ctx.fill();ctx.stroke();
@@ -1032,7 +1390,7 @@ function drawEnt(e){
     for(const [from,to,bl] of arcs){
       ctx.globalAlpha=.22;ctx.fillStyle=COL[e.p];ctx.beginPath();ctx.moveTo(0,0);ctx.arc(0,0,BLADE,from,to);ctx.closePath();ctx.fill();
       ctx.globalAlpha=1;ctx.strokeStyle='#f4f7f5';ctx.lineWidth=3;ctx.lineCap='round';
-      ctx.beginPath();ctx.moveTo(Math.cos(bl)*R,Math.sin(bl)*R);ctx.lineTo(Math.cos(bl)*BLADE,Math.sin(bl)*BLADE);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(dcos(bl)*R,dsin(bl)*R);ctx.lineTo(dcos(bl)*BLADE,dsin(bl)*BLADE);ctx.stroke();
     }
   }
   if(invuln(e)){ctx.globalAlpha=1;ctx.strokeStyle='#ffffff';ctx.shadowColor='#ffffff';ctx.shadowBlur=12;ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(0,0,R+4,0,Math.PI*2);ctx.stroke();ctx.shadowBlur=0;}
@@ -1042,7 +1400,7 @@ function drawEnt(e){
 function drawCrystal(x,y,scoredCol,sc,i,alpha=1){
   ctx.save();ctx.translate(x,y);ctx.globalAlpha=alpha;
   if(scoredCol){ctx.fillStyle=scoredCol;ctx.shadowColor=scoredCol;ctx.shadowBlur=12;}
-  else{ctx.translate(0,RM.matches?0:Math.sin(clock/380+i*2)*2.5);ctx.shadowColor=CRYG;ctx.shadowBlur=20;ctx.fillStyle=CRY;}
+  else{ctx.translate(0,RM.matches?0:dsin(clock/380+i*2)*2.5);ctx.shadowColor=CRYG;ctx.shadowBlur=20;ctx.fillStyle=CRY;}
   ctx.scale(sc,sc);
   ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(9,0);ctx.lineTo(0,13);ctx.lineTo(-9,0);ctx.closePath();ctx.fill();
   ctx.shadowBlur=0;ctx.fillStyle='rgba(255,255,255,.55)';ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(4,0);ctx.lineTo(0,13);ctx.closePath();ctx.fill();
@@ -1075,7 +1433,7 @@ function draw(){
   // crystal pedestals
   for(const c of v.crystals.map(k=>({x:k.hx,y:k.hy}))){ctx.strokeStyle='rgba(212,195,255,.25)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(c.x,c.y,18,0,Math.PI*2);ctx.stroke();}
   // trails
-  if(state==='play'&&sim&&sim.phase==='count'&&prevSim)drawTrails(prevSim,.35);
+  if(state==='play'&&sim&&sim.phase==='ready'&&prevSim)drawTrails(prevSim,.35);
   else if(state!=='play'&&view)drawTrails(view,.3);
   // crystals
   v.crystals.forEach((k,i)=>{if(!k.carrier)drawCrystal(k.x,k.y,k.scored?COL[k.scored]:null,1,i);});
@@ -1089,7 +1447,7 @@ function draw(){
     ctx.save();ctx.translate(m.x,m.y);
     if(on){ctx.shadowColor='#ff2e2e';ctx.shadowBlur=14;}
     ctx.fillStyle=on?'#ff3131':'#6e1616';ctx.strokeStyle=on?'#ffb3b3':'#a33';ctx.lineWidth=1.5;
-    ctx.beginPath();for(let j=0;j<6;j++){const a=j*Math.PI/3;ctx.lineTo(Math.cos(a)*7.5,Math.sin(a)*7.5);}ctx.closePath();ctx.fill();ctx.stroke();
+    ctx.beginPath();for(let j=0;j<6;j++){const a=j*Math.PI/3;ctx.lineTo(dcos(a)*7.5,dsin(a)*7.5);}ctx.closePath();ctx.fill();ctx.stroke();
     ctx.shadowBlur=0;ctx.fillStyle=COL[m.p];ctx.beginPath();ctx.arc(0,0,2.2,0,Math.PI*2);ctx.fill();
     if(secret){ctx.globalAlpha=.8;ctx.setLineDash([2,3]);ctx.strokeStyle=COL[m.p];ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(0,0,12,0,Math.PI*2);ctx.stroke();} // "only you can see this"
     ctx.restore();
@@ -1097,6 +1455,18 @@ function draw(){
   // entities
   const es=[...v.ents].sort((a,b)=>(a.alive-b.alive)||(a.live-b.live));
   es.forEach(drawEnt);
+  for(const e of v.ents){ // Sniper aim lines (only while it still has a shot)
+    if(e.ch!=='sniper'||!e.alive||e.shots>=(e.tier>=2?2:1))continue;
+    const dx=dcos(e.aim),dy=dsin(e.aim),L=rayExit(e.x,e.y,dx,dy);
+    ctx.save();ctx.strokeStyle=COL[e.p];ctx.globalAlpha=e.live?.75:.35;ctx.lineWidth=e.live?1.5:1;ctx.setLineDash([10,6]);
+    ctx.beginPath();ctx.moveTo(e.x+dx*14,e.y+dy*14);ctx.lineTo(e.x+dx*L,e.y+dy*L);ctx.stroke();ctx.restore();
+  }
+  for(const sh of v.shields||[]){ // Ben Shieldon's bubbles
+    if(!shieldOn(sh))continue;const c=COL[sh.owner.p];ctx.save();
+    ctx.globalAlpha=sh.owner.live||sh.dropped?.16:.1;ctx.fillStyle=c;ctx.beginPath();ctx.arc(sh.x,sh.y,sh.r,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=.7;ctx.strokeStyle=c;ctx.lineWidth=1.5;if(sh.dropped)ctx.setLineDash([5,4]);
+    ctx.beginPath();ctx.arc(sh.x,sh.y,sh.r,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
   for(const sp of v.spectres){ // spectres
     if(!sp.dropped&&!sp.owner.alive)continue;
     const c=COL[sp.owner.p];ctx.save();
@@ -1110,7 +1480,7 @@ function draw(){
   // projectiles
   for(const p of v.proj){
     ctx.save();
-    if(p.k==='ranger'){const n=Math.hypot(p.vx,p.vy);ctx.strokeStyle=COL[p.p];ctx.lineWidth=2.5;ctx.lineCap='round';
+    if(p.k==='ranger'){const n=dhypot(p.vx,p.vy);ctx.strokeStyle=COL[p.p];ctx.lineWidth=2.5;ctx.lineCap='round';
       ctx.beginPath();ctx.moveTo(p.x-p.vx/n*12,p.y-p.vy/n*12);ctx.lineTo(p.x,p.y);ctx.stroke();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();}
     else{ctx.shadowColor='#bfe9ff';ctx.shadowBlur=12;ctx.fillStyle='#e6f7ff';ctx.beginPath();ctx.arc(p.x,p.y,4.5,0,Math.PI*2);ctx.fill();ctx.strokeStyle=COL[p.p];ctx.lineWidth=1.5;ctx.stroke();}
     ctx.restore();
@@ -1124,22 +1494,40 @@ function draw(){
       ctx.beginPath();ctx.moveTo(R,sw);ctx.lineTo(2*T+R,sw);ctx.stroke();}
     else if(f.k==='ko'||f.k==='boom'){ctx.strokeStyle=f.k==='boom'?'#ffb35c':f.c;ctx.lineWidth=3;ctx.beginPath();ctx.arc(f.x,f.y,8+k*26,0,Math.PI*2);ctx.stroke();}
     else if(f.k==='grab'){ctx.strokeStyle=CRY;ctx.lineWidth=2;ctx.beginPath();ctx.arc(f.x,f.y,14+k*34,0,Math.PI*2);ctx.stroke();ctx.strokeStyle=f.c;ctx.beginPath();ctx.arc(f.x,f.y,8+k*22,0,Math.PI*2);ctx.stroke();}
+    else if(f.k==='tracer'){ctx.strokeStyle='#ffffff';ctx.lineWidth=3*(1-k)+1;ctx.shadowColor=f.c;ctx.shadowBlur=10;ctx.beginPath();ctx.moveTo(f.x,f.y);ctx.lineTo(f.x2,f.y2);ctx.stroke();}
+    else if(f.k==='block'){ctx.strokeStyle=f.c;ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(f.x,f.y,6+k*12,0,Math.PI*2);ctx.stroke();}
+    else if(f.k==='timewave'){ctx.strokeStyle='#d8dcf0';ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.beginPath();ctx.arc(f.x,f.y,20+k*420,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
     else if(f.k==='ice'){ctx.strokeStyle='#bfe9ff';ctx.lineWidth=2;ctx.beginPath();ctx.arc(f.x,f.y,10+k*18,0,Math.PI*2);ctx.stroke();}
     else{ctx.fillStyle=f.c;ctx.beginPath();ctx.arc(f.x,f.y,3+k*8,0,Math.PI*2);ctx.fill();}
     ctx.restore();
   }
-  // countdown
-  if(state==='play'&&sim&&sim.phase==='count'){
-    ctx.fillStyle='rgba(9,14,15,.45)';ctx.fillRect(0,0,W,H);
-    ctx.textAlign='center';ctx.fillStyle='#e7eee9';
-    ctx.font='700 96px "Chakra Petch", sans-serif';ctx.fillText(String(Math.ceil(sim.count/60)),480,250);
-    ctx.font='600 20px "Chakra Petch", sans-serif';
-    const ap=sim.active;
-    ctx.fillStyle=COL[ap];ctx.fillText(`${NAME[ap]}'s turn · ${CH[G.picks[ap][G.round]].name}${tierTag(G.tiers[ap][G.round])}`,480,300);
+  // countdown: big character name in the team's colour, and a red ring on the live character
+  const live=state==='play'&&sim?sim.ents.find(e=>e.live):null;
+  if(state==='play'&&sim&&sim.phase==='ready'){
+    ctx.fillStyle='rgba(9,14,15,.5)';ctx.fillRect(0,0,W,H);
+    const ap=sim.active;ctx.textAlign='center';
+    ctx.fillStyle=COL[ap];ctx.font='600 18px "Chakra Petch", sans-serif';
+    ctx.fillText(`${NAME[ap].toUpperCase()}'S TURN`,480,128);
+    ctx.shadowColor=COL[ap];ctx.shadowBlur=18;ctx.font='700 68px "Chakra Petch", sans-serif';
+    ctx.fillText(`${CH[G.picks[ap][G.round]].name}${tierTag(G.tiers[ap][G.round])}`,480,196);ctx.shadowBlur=0;
+    ctx.fillStyle='#e7eee9';ctx.font='700 30px "Chakra Petch", sans-serif';ctx.globalAlpha=.6+.4*dsin(clock/300);
+    ctx.fillText(cpuTurn()?`Tap or click to watch ${NAME[ap]}'s turn`:'Tap, click or press Space to start',480,280);ctx.globalAlpha=1;
     ctx.fillStyle='#c3d0cc';ctx.font='500 15px Barlow, sans-serif';
     const n=G.turns.length;
-    if(!cpuTurn()){ctx.fillStyle='#8a9d99';ctx.fillText('Left side: drag to move. Right side: touch to act (hold to draw the bow).',480,360);ctx.fillStyle='#c3d0cc';}
-    ctx.fillText(n?`${n} echo${n>1?'es':''} will replay. ${G.half?`This turn decides round ${G.round+1}'s score.`:'Deliveries this turn are provisional.'}`:'No echoes yet. Everything you do now replays on every later turn.',480,330);
+    if(!cpuTurn()){ctx.fillStyle='#8a9d99';ctx.fillText('Left side: drag to move. Right side: touch to act (hold to draw the bow).',480,408);ctx.fillStyle='#c3d0cc';}
+    ctx.fillText(n?`${n} echo${n>1?'es':''} will replay. ${G.half?`This turn decides round ${G.round+1}'s score.`:'Deliveries this turn are provisional.'}`:'No echoes yet. Everything you do now replays on every later turn.',480,384);
+    if(live)drawEnt(live); // redraw the live character above the dimming so it stands out
+  }
+  if(state==='replay'&&sim.focus&&sim.focus.alive){ // replay: mark whose turn it was
+    ctx.save();ctx.strokeStyle='#ffffff';ctx.globalAlpha=.8;ctx.setLineDash([4,4]);ctx.lineWidth=2;ctx.beginPath();ctx.arc(sim.focus.x,sim.focus.y,22,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
+  // red highlight ring: through the countdown and the first 2 seconds of the turn
+  if(live&&(sim.phase==='ready'||sim.t<120)){
+    const fade=sim.phase==='ready'?1:1-sim.t/120,pulse=(dsin(clock/140)+1)/2;
+    ctx.save();ctx.globalAlpha=fade;ctx.strokeStyle='#ff3b3b';ctx.shadowColor='#ff3b3b';ctx.shadowBlur=14;
+    ctx.lineWidth=3;ctx.beginPath();ctx.arc(live.x,live.y,24+pulse*6,0,Math.PI*2);ctx.stroke();
+    ctx.lineWidth=1.5;ctx.globalAlpha=fade*.5;ctx.beginPath();ctx.arc(live.x,live.y,34+pulse*8,0,Math.PI*2);ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -1147,7 +1535,8 @@ let hudKey='';
 function updateHUD(){
   const t1=G?G.total[1]:0,t2=G?G.total[2]:0;
   let tm=(TICKS/60).toFixed(1);
-  if(sim&&(state==='play'||state==='paused'))tm=sim.phase==='count'?'READY':((TICKS-sim.t)/60).toFixed(1);
+  if(sim&&(state==='play'||state==='paused'))tm=sim.phase==='ready'?'READY':((TICKS-sim.t)/60).toFixed(1);
+  if(state==='replay')tm=((TICKS-sim.t)/60).toFixed(1);
   else if(state==='summary'||state==='over')tm='0.0';
   const ap=G?active():0;
   const rl=G?`Round ${Math.min(G.round+1,G.rounds)} / ${G.rounds} · ${NAME[ap]}'s turn`:'Setup';
@@ -1166,20 +1555,23 @@ let last=performance.now(),acc=0;const DT=1000/60;
 function frame(now){
   const dt=Math.min(100,now-last);last=now;clock+=dt;
   if(state==='play'){
-    acc+=dt;
-    while(acc>=DT&&state==='play'){
-      acc-=DT;
-      if(sim.phase==='count'){sim.count--;actQ[1]=actQ[2]=false;if(sim.count<=0)sim.phase='run';}
-      else step();
-    }
+    if(sim.phase==='ready'){acc=0;actQ[1]=false;} // waiting for a tap
+    else{acc+=dt;while(acc>=DT&&state==='play'){acc-=DT;step();}}
+  }else if(state==='replay'&&!sim.done){
+    acc+=dt*replaySpeed;while(acc>=DT&&state==='replay'&&!sim.done){acc-=DT;step();}
   }else acc=0;
   draw();updateHUD();
   requestAnimationFrame(frame);
 }
+$('stage').addEventListener('pointerdown',ev=>{if(ev.target.closest('button'))return;startTurn();});
+$('replayBtn').onclick=()=>startReplay('ready');
+$('rpClose').onclick=endReplay;
+$('rpSpeed').onclick=()=>{replaySpeed=replaySpeed===1?2:1;$('rpSpeed').textContent=replaySpeed===1?'2× speed':'1× speed';};
+$('rpAgain').onclick=()=>{const f=replaySaved.from;sim=replaySaved.sim;view=replaySaved.view;startReplay(f);};
 $('pauseBtn').onclick=()=>{if(state==='play')pause();else if(state==='paused')resume();};
 const CapApp=window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.App;
 if(CapApp)CapApp.addListener('backButton',()=>{ // Android back: pause, resume, or leave from the setup screen
-  if(state==='play')pause();else if(state==='paused')resume();else if(state==='setup')CapApp.exitApp();else showSetup();
+  if(state==='replay')endReplay();else if(state==='play')pause();else if(state==='paused')resume();else if(state==='setup')CapApp.exitApp();else showSetup();
 });
 showSetup();
 requestAnimationFrame(frame);
