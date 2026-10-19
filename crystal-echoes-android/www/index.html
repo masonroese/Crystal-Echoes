@@ -16,6 +16,7 @@
 <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore-compat.js"></script>
 <script src="firebase-config.js"></script>
+<script src="audio.js"></script>
 <title>Crystal Echoes</title>
 <style>
 @font-face{font-family:'Chakra Petch';src:url('fonts/ChakraPetch-Medium.ttf') format('truetype');font-weight:500;font-display:swap}
@@ -164,6 +165,7 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 .hud .who b{font-size:10px}.hud .who small{font-size:9px;display:block}
 .hud .mid small{font-size:8px}.hud .timer{font-size:15px}.hud .pip{width:6px;height:6px}
 .pausebtn{font:700 12px var(--display);background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:2px 8px;margin-left:6px}
+.pausebtn[aria-pressed="true"]{color:var(--muted);text-decoration:line-through}
 .ov{position:fixed;inset:0;z-index:5;padding:max(10px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) max(10px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left));touch-action:pan-y;-webkit-user-select:none}
 .panel{gap:10px}.panel h2{font-size:21px}.panel p{font-size:13.5px}
 .cards{grid-template-columns:repeat(3,1fr);gap:8px}
@@ -195,7 +197,7 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
     <div class="side r">
       <span class="who"><b class="p2c" id="n2">Cobalt</b><small id="c2">Not picked</small></span>
       <span class="score p2c" id="s2">0</span>
-      <button type="button" class="pausebtn" id="pauseBtn" aria-label="Pause">II</button>
+      <button type="button" class="pausebtn" id="muteBtn" aria-label="Mute sound" aria-pressed="false">♪</button><button type="button" class="pausebtn" id="pauseBtn" aria-label="Pause">II</button>
     </div>
   </div>
   <div class="stage" id="stage">
@@ -392,6 +394,16 @@ const DRAW_SPEED=32/60*SPEED_MULT; // 2 tiles/s while drawing
 const pname=p=>NAME[p]+(G&&G.mode==='cpu'&&p===2?' (CPU)':'');
 const ename=e=>`${NAME[e.p]}'s ${CH[e.ch].name}${e.live?'':' echo'}`;
 const stamp=t=>(t/60).toFixed(1)+'s';
+/* ---------- sound (audio.js) ---------- */
+const A=window.CEAudio||{sfx(){},preview(){},music(){},prefs:{},setPref(){}};
+// only the simulation on screen makes noise (not the silent re-runs used to rebuild online turns)
+const audible=()=>sim===view&&(state==='play'||state==='replay');
+function sfx(name,e,x){
+  if(!audible())return;
+  const px=e?e.x:x,main=e&&(e.live||(sim.replay&&e===sim.focus));
+  A.sfx(name,{pan:px==null?0:(px/W*2-1)*.7,vol:!e||main?1:.5}); // echoes are quieter
+}
+const mineHeard=m=>!minesHidden(m)||m.p===minesViewer(); // a secret mine stays silent for the opponent
 
 function mkEnt(p,r,ch,live,rec,tier,aimRec){
   const sp=spawn(p,r);
@@ -444,11 +456,11 @@ function log(s,kind='info'){sim.log.push([sim.t,s,kind]);} // kind: 'score' | 'k
 
 function kill(o,by,how){
   if(!o.alive||invuln(o))return;
-  if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});return;} // Ben's shield
+  if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});sfx('block',o);return;} // Ben's shield
   o.alive=false; o.frozen=0; if(o.p!==by.p)sim.kills[by.p]++; // friendly knockouts don't count
   const verb={slash:'slashed',arrow:'shot',haunt:'haunted',snipe:'sniped'}[how];
   log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} ${verb} ${ename(o)}`,'ko');
-  fx('ko',o.x,o.y,{c:COL[o.p],m:30});
+  fx('ko',o.x,o.y,{c:COL[o.p],m:30});sfx('ko',o);if(how==='haunt'||how==='spectre')sfx('haunt',by);
   if(o.carry.length)dropCrystals(o);
 }
 function dropCrystals(o){
@@ -462,6 +474,7 @@ function dropCrystals(o){
   held.forEach((k,i)=>{ // spread a dropped stack a little so each crystal is visible
     const a=i*2.4;k.carrier=null;k.x=x+(i?dcos(a)*10:0);k.y=y+(i?dsin(a)*10:0);k.drop=20;
   });
+  sfx('drop',o);
   log(`${ename(o)} dropped ${held.length>1?held.length+' crystals':'the '+held[0].n+' crystal'}`);
 }
 
@@ -488,7 +501,7 @@ function fireSniper(e){
   const victims=e.tier>=1?hits:hits.slice(0,1); // tier 1 pierces
   const end=victims.length&&e.tier<1?victims[0][0]:stop;
   victims.forEach(([,o])=>kill(o,e,'snipe'));
-  fx('tracer',e.x,e.y,{x2:e.x+dx*end,y2:e.y+dy*end,c:COL[e.p],m:16});
+  fx('tracer',e.x,e.y,{x2:e.x+dx*end,y2:e.y+dy*end,c:COL[e.p],m:16});sfx('snipe',e);
   if(!victims.length)log(`${ename(e)} fired and missed`);
 }
 function doAction(e){
@@ -496,22 +509,22 @@ function doAction(e){
   switch(e.ch){
     case 'ninja':{
       // start a 0.2 s swing: blade sweeps from straight behind, across the left side, to straight ahead
-      e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};
+      e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};sfx('slash',e);
       break;}
     case 'ranger': case 'frost':{
       e.cd=c.cd; const sp=e.ch==='ranger'?16:5.5; // ranger arrow 30 tiles/s
-      sim.proj.push({k:e.ch,x:e.x+e.fx/n*10,y:e.y+e.fy/n*10,vx:e.fx/n*sp,vy:e.fy/n*sp,p:e.p,by:e});
+      sim.proj.push({k:e.ch,x:e.x+e.fx/n*10,y:e.y+e.fy/n*10,vx:e.fx/n*sp,vy:e.fy/n*sp,p:e.p,by:e});sfx(e.ch==='ranger'?'arrow':'frostThrow',e);
       break;}
     case 'ghost':
       if(e.tier<2||e.dropped)break; // tier 2: drop both spectres here, once per turn
       e.dropped=true;
       for(const sp of sim.spectres)if(sp.owner===e&&!sp.dropped){sp.dropped=true;sp.cx=e.x;sp.cy=e.y;}
-      fx('ice',e.x,e.y,{m:20});log(`${ename(e)} dropped its spectres`);
+      fx('ice',e.x,e.y,{m:20});sfx('spectreDrop',e);log(`${ename(e)} dropped its spectres`);
       break;
     case 'ben':
       if(e.tier<2||e.dropped)break; // tier 2: drop a copy of the shield here, once per turn
       e.dropped=true;sim.shields.push({owner:e,r:SHIELD_R*2,x:e.x,y:e.y,dropped:true});
-      fx('block',e.x,e.y,{c:COL[e.p],m:24});log(`${ename(e)} planted a shield`);
+      fx('block',e.x,e.y,{c:COL[e.p],m:24});sfx('shieldPlant',e);log(`${ename(e)} planted a shield`);
       break;
     case 'sniper':{ // instant bullet along the aim line, through walls
       if(sim.t<SNIPER_DELAY||e.shots>=(e.tier>=2?2:1))break; // no shots in the first 0.5 s of a turn
@@ -520,12 +533,12 @@ function doAction(e){
     case 'time':{ // stop echoes in place; they resume their routes afterwards
       e.cd=e.tier>=2?180:c.cd;const dur=e.tier>=1?120:60;let n=0;
       for(const o of sim.ents)if(o.alive&&!o.live&&o!==e&&(e.tier<2||o.p!==e.p)){o.stopped=Math.max(o.stopped,dur);o.swing=null;n++;}
-      fx('timewave',e.x,e.y,{m:36});log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
+      fx('timewave',e.x,e.y,{m:36});sfx('timeStop',e);log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
       break;}
-    case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); break;
+    case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); sfx('dash',e); break;
     case 'trapper':
       if(e.mines>=maxMines(e))return;
-      e.mines++; e.cd=c.cd; sim.mines.push({x:e.x,y:e.y,p:e.p,arm:30,by:e});
+      e.mines++; e.cd=c.cd; const m={x:e.x,y:e.y,p:e.p,arm:30,by:e}; sim.mines.push(m); if(mineHeard(m))sfx('minePlace',e);
       break;
   }
 }
@@ -589,9 +602,9 @@ function step(){
     if(e.ch==='ranger'&&e.tier>=2){ // tier 2: fires on press, 0.5 s between shots
       if(act&&e.cd===0){doAction(e);e.cd=RANGER_T2_CD;}
     }else if(e.ch==='ranger'){ // press starts a charge, release fires it
-      if(e.charge<0&&(act||held)&&e.cd===0)e.charge=0;
+      if(e.charge<0&&(act||held)&&e.cd===0){e.charge=0;sfx('draw',e);}
       if(e.charge>=0){
-        if(held){if(e.charge<CHARGE_MAX)e.charge++;}
+        if(held){if(e.charge<CHARGE_MAX&&++e.charge===CHARGE_MAX)sfx('drawReady',e);}
         else{const full=e.charge>=CHARGE_MAX;e.charge=-1;if(full)doAction(e);} // early release cancels
       }
     }else if(act&&e.cd===0)doAction(e);
@@ -622,9 +635,9 @@ function step(){
   for(const pr of sim.proj){
     for(let s=0;s<2&&!pr.dead;s++){
       pr.x+=pr.vx/2;pr.y+=pr.vy/2;
-      if(solid(Math.floor(pr.x/T),Math.floor(pr.y/T))){pr.dead=true;fx('spark',pr.x,pr.y,{c:pr.k==='frost'?'#bfe9ff':COL[pr.p],m:10});break;}
+      if(solid(Math.floor(pr.x/T),Math.floor(pr.y/T))){pr.dead=true;fx('spark',pr.x,pr.y,{c:pr.k==='frost'?'#bfe9ff':COL[pr.p],m:10});sfx(pr.k==='frost'?'iceHit':'thud',null,pr.x);break;}
       if(sim.shields.some(sh=>shieldOn(sh)&&sh.owner.p!==pr.p&&dhypot(pr.x-sh.x,pr.y-sh.y)<=sh.r)){ // enemy shield absorbs it
-        pr.dead=true;fx('block',pr.x,pr.y,{c:COL[3-pr.p],m:14});break;}
+        pr.dead=true;fx('block',pr.x,pr.y,{c:COL[3-pr.p],m:14});sfx('block',null,pr.x);break;}
       for(const o of sim.ents){
         if(!o.alive||o===pr.by||dhypot(o.x-pr.x,o.y-pr.y)>R+4)continue;
         if(pr.k==='frost'&&o.frozeOnce)continue; // already frozen once this turn: bolt passes through
@@ -632,7 +645,7 @@ function step(){
         if(pr.k==='ranger'&&o.p===pr.p)continue; // arrows pass through teammates
         pr.dead=true;
         if(pr.k==='ranger')kill(o,pr.by,'arrow');
-        else{o.frozen=150;o.frozenBy=pr.by;o.frozeOnce=true;o.swing=null;o.dash=0;o.charge=-1;log(`${ename(pr.by)} froze ${ename(o)}`);fx('ice',o.x,o.y,{m:20});
+        else{o.frozen=150;o.frozenBy=pr.by;o.frozeOnce=true;o.swing=null;o.dash=0;o.charge=-1;log(`${ename(pr.by)} froze ${ename(o)}`);fx('ice',o.x,o.y,{m:20});sfx('freeze',o);
           if(pr.by.tier>=2&&o.p!==pr.p&&o.carry.length)dropCrystals(o);} // tier 2: frozen enemies drop their crystals
         break;
       }
@@ -642,9 +655,9 @@ function step(){
   // mines
   for(const m of sim.mines){
     if(m.dead)continue;
-    if(m.arm>0){m.arm--;continue;}
+    if(m.arm>0){if(--m.arm===0&&mineHeard(m))sfx('mineArm',null,m.x);continue;}
     for(const o of sim.ents){
-      if(o.alive&&o!==m.by&&!invuln(o)&&!shielded(o,m.p)&&dhypot(o.x-m.x,o.y-m.y)<R+6){m.dead=true;fx('boom',m.x,m.y,{c:COL[m.p],m:26});kill(o,m.by,'mine');break;}
+      if(o.alive&&o!==m.by&&!invuln(o)&&!shielded(o,m.p)&&dhypot(o.x-m.x,o.y-m.y)<R+6){m.dead=true;fx('boom',m.x,m.y,{c:COL[m.p],m:26});sfx('boom',null,m.x);kill(o,m.by,'mine');break;}
     }
   }
   // crystals
@@ -656,18 +669,19 @@ function step(){
         const i=sim.delivered++;
         k.scored=e.p;k.carrier=null;e.carry=e.carry.filter(c=>c!==k);k.x=GOAL.x+((i%4)-1.5)*13;k.y=GOAL.y+(((i/4)|0)-.5)*14+7;
         const pts=e.ch==='ninja'&&e.tier>=2?2:1; // tier 2 Ninja: double points
-        sim.score[e.p]+=pts;log(`${ename(e)} delivered the ${k.n} crystal${pts>1?' (worth 2)':''}`,'score');fx('grab',GOAL.x,GOAL.y,{c:COL[e.p],m:36});
+        sim.score[e.p]+=pts;log(`${ename(e)} delivered the ${k.n} crystal${pts>1?' (worth 2)':''}`,'score');fx('grab',GOAL.x,GOAL.y,{c:COL[e.p],m:36});sfx('score',e);
       }
       continue;
     }
     if(k.drop>0){k.drop--;continue;}
     for(const e of sim.ents){
       if(!e.alive||e.frozen>0||CH[e.ch].noCarry||dhypot(e.x-k.x,e.y-k.y)>=22)continue;
-      k.carrier=e;e.carry.push(k);log(`${ename(e)} picked up the ${k.n} crystal`);fx('grab',k.x,k.y,{c:COL[e.p],m:24});break;
+      k.carrier=e;e.carry.push(k);log(`${ename(e)} picked up the ${k.n} crystal`);fx('grab',k.x,k.y,{c:COL[e.p],m:24});sfx('pickup',e);break;
     }
   }
   tickFx();
   sim.t++;
+  if(sim.t===TICKS-180||sim.t===TICKS-120||sim.t===TICKS-60)sfx('tick');
   if(sim.endAt===null&&sim.ents.every(e=>!e.alive))sim.endAt=sim.t+45; // everyone knocked out
   if(sim.t>=TICKS||(sim.endAt!==null&&sim.t>=sim.endAt)){if(sim.replay)replayDone();else endRound();}
 }
@@ -935,12 +949,19 @@ function showSetup(){
     <div class="opts">
       <div class="opt"><span>Opponent</span><div class="seg" data-k="mode"><button type="button" data-v="cpu">Computer</button><button type="button" data-v="2p">Second player</button></div></div>
       <div class="opt"><span>Rounds</span><div class="seg" data-k="rounds"><button type="button" data-v="3">3</button><button type="button" data-v="5">5</button></div></div>
+      <div class="opt"><span>Music</span><div class="seg" data-a="music"><button type="button" data-v="1">On</button><button type="button" data-v="0">Off</button></div></div>
+      <div class="opt"><span>Sound effects</span><div class="seg" data-a="sfx"><button type="button" data-v="1">On</button><button type="button" data-v="0">Off</button></div></div>
     </div>
     <div class="row"><button class="btn" id="go" type="button">Start round 1</button>${ONLINE_OK()?'<button class="btn ghost" id="online" type="button">Play online</button>':''}<button class="btn ghost" id="how" type="button">How to play</button></div>
   </div>`);
   $('how').onclick=showHowTo;
   if($('online'))$('online').onclick=()=>showLobby();
-  ov.querySelectorAll('.seg').forEach(seg=>{
+  ov.querySelectorAll('.seg[data-a]').forEach(seg=>{ // sound switches, remembered on this device
+    const k=seg.dataset.a,sync=()=>seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v==='1'===!!A.prefs[k])));
+    seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{A.setPref(k,b.dataset.v==='1');if(A.prefs.muted)setMuted(false);sync();});
+    sync();
+  });
+  ov.querySelectorAll('.seg[data-k]').forEach(seg=>{
     const k=seg.dataset.k,sync=()=>seg.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v==String(opts[k]))));
     seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{opts[k]=k==='rounds'?+b.dataset.v:b.dataset.v;sync();});
     sync();
@@ -1019,7 +1040,7 @@ function startRound(){
 let startedAt=0;
 function startTurn(){ // the turn begins on a tap, click or key press
   if(state!=='play'||!sim||sim.phase!=='ready')return false;
-  sim.phase='run';actQ[1]=false;$('readyBar').hidden=true;startedAt=performance.now();return true;
+  sim.phase='run';actQ[1]=false;$('readyBar').hidden=true;startedAt=performance.now();sfx('go');return true;
 }
 
 /* ---------- replay of the last turn ---------- */
@@ -1043,7 +1064,7 @@ function endReplay(){
 }
 
 function endRound(){
-  state='summary';showTouch();
+  state='summary';showTouch();A.sfx('turnEnd');
   const live=sim.ents.find(e=>e.live), p=live.p, sc=sim.score, closing=G.half===1;
   G.turns.push({p,r:G.round,ch:live.ch,rec:live.rec,tier:live.tier,aimRec:live.aimRec});
   if(closing){G.total[1]+=sc[1];G.total[2]+=sc[2];G.roundRes[G.round]={1:sc[1],2:sc[2],k1:sim.kills[1],k2:sim.kills[2]};}
@@ -1078,7 +1099,7 @@ function endRound(){
 }
 
 function showOver(){
-  state='over';
+  state='over';A.sfx('fanfare');
   const a=G.total[1],b=G.total[2];
   const spentNote=(G.spent[1]||G.spent[2])?`<p class="sub">Crystals spent on upgrades: ${NAME[1]} ${G.spent[1]}, ${NAME[2]} ${G.spent[2]}. Totals are after spending.</p>`:'';
   const ka=G.roundRes.reduce((s,t)=>s+t.k1,0),kb=G.roundRes.reduce((s,t)=>s+t.k2,0);
@@ -1560,6 +1581,7 @@ function frame(now){
   }else if(state==='replay'&&!sim.done){
     acc+=dt*replaySpeed;while(acc>=DT&&state==='replay'&&!sim.done){acc-=DT;step();}
   }else acc=0;
+  A.music(state==='play'||state==='paused'||state==='replay'?'game':'menu',state==='paused'); // rock in play, lo-fi on menus
   draw();updateHUD();
   requestAnimationFrame(frame);
 }
@@ -1569,6 +1591,14 @@ $('rpClose').onclick=endReplay;
 $('rpSpeed').onclick=()=>{replaySpeed=replaySpeed===1?2:1;$('rpSpeed').textContent=replaySpeed===1?'2× speed':'1× speed';};
 $('rpAgain').onclick=()=>{const f=replaySaved.from;sim=replaySaved.sim;view=replaySaved.view;startReplay(f);};
 $('pauseBtn').onclick=()=>{if(state==='play')pause();else if(state==='paused')resume();};
+function setMuted(m){A.setPref('muted',m);$('muteBtn').setAttribute('aria-pressed',String(m));$('muteBtn').setAttribute('aria-label',m?'Unmute sound':'Mute sound');}
+setMuted(!!A.prefs.muted);
+$('muteBtn').onclick=()=>setMuted(!A.prefs.muted);
+addEventListener('keydown',ev=>{if(ev.key.toLowerCase()==='m'&&!ev.repeat&&!(ev.target instanceof HTMLInputElement))setMuted(!A.prefs.muted);});
+document.addEventListener('click',ev=>{ // menu clicks; draft cards play the character's signature sound
+  const b=ev.target.closest('button');if(!b||b.disabled||b.id==='muteBtn')return;
+  if(b.classList.contains('card'))A.preview(b.dataset.k);else A.sfx('click');
+});
 const CapApp=window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.App;
 if(CapApp)CapApp.addListener('backButton',()=>{ // Android back: pause, resume, or leave from the setup screen
   if(state==='replay')endReplay();else if(state==='play')pause();else if(state==='paused')resume();else if(state==='setup')CapApp.exitApp();else showSetup();
