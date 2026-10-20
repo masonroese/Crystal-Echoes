@@ -13,6 +13,15 @@ import numpy as np
 COLS,ROWS,CELL=9,4,48
 INSET=7 # source pixels skipped inside each grid line (lines can be ~4 px thick)
 src=Image.open(sys.argv[1]).convert('RGBA');a=np.asarray(src).copy()
+if src.size==(COLS*CELL,ROWS*CELL): # already drawn at game size: copy it, minus any leftover faint grid lines
+    for axis in (0,1):
+        b=a if axis==0 else a.transpose(1,0,2) # axis 0: rows, axis 1: columns
+        for i in range(1,b.shape[0]-1):
+            row=b[i];vis=row[:,3]>0
+            if (vis.mean()>.85) and np.median(row[vis,3])<100: # a faint line all the way across
+                solid=(b[i-1,:,3]>=16)|(b[i+1,:,3]>=16)
+                row[solid]=b[i-1][solid];row[~solid]=0 # inside a sprite take the pixel above, elsewhere erase
+    Image.fromarray(a,'RGBA').save(sys.argv[2],optimize=True);print('game-size sheet: copied',sys.argv[2]);sys.exit()
 rgb=a[:,:,:3].astype(int);alpha=a[:,:,3]
 painted=(alpha==0).mean()<.05 # no real transparency: the background is painted in
 if painted:line=(rgb.mean(axis=2)<190)&(rgb.max(axis=2)-rgb.min(axis=2)<12) # grey grid lines

@@ -1496,7 +1496,7 @@ function drawSprite(ctx,ch,p,t,opts){
      row 2: walk up-right 1-3, walk down-right 1-3
      row 3: attack right 1-3, attack up 1-3, attack down 1-3
    Empty cells are allowed: the game falls back (diagonal walk -> walk right, attack up -> attack right, anything -> idle). */
-const SHEETS=['ninja','ninja-1','ninja-2','sprinter','sprinter-1','sprinter-2']; // add each sheet once it is in sprites/: 'ninja' is the base, 'ninja-1' / 'ninja-2' the upgrade tiers
+const SHEETS=['ninja','ninja-1','ninja-2','sprinter','sprinter-1','sprinter-2','ranger','ranger-1','ranger-2']; // add each sheet once it is in sprites/: 'ninja' is the base, 'ninja-1' / 'ninja-2' the upgrade tiers
 const SHEET_SIZE={sprinter:.85}; // per-character drawing size, for art drawn larger or smaller than the rest (1 = as drawn)
 const CELL=48, sheets={}; // character -> {img, filled: set of "col,row" cells that have art}
 let drawT=0; // tick of the turn being drawn, for animation timing
