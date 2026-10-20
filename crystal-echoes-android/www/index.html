@@ -216,8 +216,8 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 <div id="rules" hidden><ul class="rules">
         <li>Each round has two 10-second turns, one per player. The first turn alternates each round.</li>
         <li>On your turn only your character is live. Every earlier turn, from both players, replays as an echo repeating its exact inputs.</li>
-        <li>Every turn, each side sends out 2 runners. They walk from their own gate to the other side along fixed lanes, one along the top and one along the bottom. Both sides use the same lanes, mirrored. Each runner carries a crystal. A runner that reaches the far side still holding its crystal scores 2 points for its side.</li>
-        <li>Runners can't fight back. Knock one out and it drops its crystal, which anyone can pick up and carry to the center ring for 1 point. Freezing a runner holds it up, so a runner that is delayed long enough won't make it before the turn ends. Time stops don't affect runners. Ben's shield protects his own runners.</li>
+        <li>Every turn, each side sends out 2 runners. They walk from their own gate to the other side along fixed lanes, one along the top and one along the bottom. Both sides use the same lanes, mirrored. Runners carry 1 crystal in rounds 1 and 2, 2 crystals in rounds 3 and 4, and 3 in round 5. A runner that reaches the far side scores 2 points for each crystal it still holds.</li>
+        <li>Runners can't fight back. Each hit makes a runner drop 1 crystal, and the hit that takes its last crystal knocks it out. After a hit, a runner can't be hit again for half a second. Dropped crystals can be picked up by anyone and carried to the center ring for 1 point each. Freezing a runner holds it up, so a runner that is delayed long enough won't make it before the turn ends. Time stops don't affect runners. Ben's shield protects his own runners.</li>
         <li>One more crystal starts each turn at the top of the center line. Carry it into the center ring for 1 point. A knocked-out carrier drops whatever it holds.</li>
         <li>Catch-up: from round 4 on, a player who is 4 or more points behind gets 1 bonus crystal just inside their gate for that round. Anyone can take it.</li>
         <li>Scores are banked only at the end of each round, from the second turn. The first turn's scores are provisional, because that turn replays as an echo during the second.</li>
@@ -297,6 +297,8 @@ const bonusText=b=>[1,2].filter(p=>b&&b[p]).map(p=>`${b[p]} bonus crystal${b[p]>
 /* ---------- runners: 2 per side, walking fixed lanes to the other side; 1 point each on arrival ----------
    Amber's top lane is drawn here; the bottom lane mirrors it top to bottom, and Cobalt's lanes mirror Amber's left to right. */
 const LANE=[[48,208],[304,208],[304,48],[656,48],[656,208],[912,208]];
+const RUNNER_HIT_CD=30; // 0.5 s between hits on the same runner
+const runnerLoad=r=>r>=4?3:r>=2?2:1; // crystals each runner carries: rounds 1-2, 3-4, 5
 const RUNNER_SPEED=2.5; // px per tick (4.7 tiles/s): about 7.9 s from end to end, so a long freeze or time stop costs the point
 const laneFor=(p,bottom)=>LANE.map(([x,y])=>[p===1?x:W-x,bottom?H-y:y]);
 function mkRunners(){
@@ -318,9 +320,10 @@ function runnerStep(e){
   if(e.wp>=e.route.length){ // made it across: a crystal it still holds is worth 2
     e.alive=false;e.dormant=true;
     if(!e.carry.length){log(`${ename(e)} made it across without its crystal`);return;}
-    for(const k of e.carry){k.scored=e.p;k.carrier=null;k.x=e.x;k.y=e.y-18;sim.score[e.p]+=2;}
+    const n=e.carry.length;
+    e.carry.forEach((k,i)=>{k.scored=e.p;k.carrier=null;k.x=e.x+(i-(n-1)/2)*14;k.y=e.y-18;sim.score[e.p]+=2;});
     e.carry=[];
-    log(`${ename(e)} brought its crystal across (worth 2)`,'score');fx('grab',e.x,e.y,{c:COL[e.p],m:36});sfx('runnerHome',e);
+    log(`${ename(e)} brought ${n>1?n+' crystals':'its crystal'} across (worth ${2*n})`,'score');fx('grab',e.x,e.y,{c:COL[e.p],m:36});sfx('runnerHome',e);
   }
 }
 const GOAL={x:480,y:288,r:34};
@@ -455,7 +458,7 @@ function simFrom(ents,round,active,extra){
   for(const e of ents)if(e.ch==='ben')shields.push({owner:e,r:SHIELD_R*(e.tier>=1?2:1),x:e.x,y:e.y,dropped:false});
   const runners=mkRunners();ents=ents.concat(runners);
   const crystals=CRYSTALS.concat(bonusCrystals(round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0}));
-  for(const r of runners){const k={x:r.x,y:r.y,n:'runner',hx:r.x,hy:r.y,carrier:r,scored:0,runner:true};r.carry.push(k);crystals.push(k);} // each runner starts holding a crystal
+  for(const r of runners)for(let i=0;i<runnerLoad(round);i++){const k={x:r.x,y:r.y,n:'runner',hx:r.x,hy:r.y,carrier:r,scored:0,runner:true};r.carry.push(k);crystals.push(k);} // runners start loaded
   return {t:0,active,grid:BASE,ents,spectres,shields,proj:[],mines:[],fx:[],
     crystals,delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'ready',endAt:null,...extra};
 }
@@ -496,14 +499,22 @@ function log(s,kind='info'){sim.log.push([sim.t,s,kind]);} // kind: 'score' | 'k
 function kill(o,by,how){
   if(!o.alive||invuln(o))return;
   if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});sfx('block',o);return;} // Ben's shield
+  if(o.ch==='runner'){ // runners lose one crystal per hit and only go down with the last one
+    if(o.hitCd>0)return; // half a second between hits, so one swing or touch can't strip them all
+    if(o.carry.length>1){
+      o.hitCd=RUNNER_HIT_CD;
+      log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} hit ${ename(o)}`,'ko');
+      fx('ko',o.x,o.y,{c:COL[o.p],m:20});sfx('ko',o);dropCrystals(o,1);return;
+    }
+  }
   o.alive=false; o.frozen=0; if(o.p!==by.p)sim.kills[by.p]++; // friendly knockouts don't count
   const verb={slash:'slashed',arrow:'shot',haunt:'haunted',snipe:'sniped'}[how];
   log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} ${verb} ${ename(o)}`,'ko');
   fx('ko',o.x,o.y,{c:COL[o.p],m:30});sfx('ko',o);if(how==='haunt'||how==='spectre')sfx('haunt',by);
   if(o.carry.length)dropCrystals(o);
 }
-function dropCrystals(o){
-  const held=o.carry;o.carry=[];
+function dropCrystals(o,count){ // drops the whole stack, or just the top `count` crystals
+  const held=count?o.carry.splice(o.carry.length-count,count):o.carry;if(!count)o.carry=[];
   let x=o.x,y=o.y;
   if(hitsWall(x,y,8)){ // a Ghost died inside a wall: push the crystal to the nearest open tile
     let best=null,bd=1e9;
@@ -620,6 +631,7 @@ function step(){
   const t=sim.t;
   for(const e of sim.ents){
     if(!e.alive)continue;
+    if(e.hitCd>0)e.hitCd--; // runners' grace period after losing a crystal
     // frozen characters pause their own input clock, so an echo resumes its route where it stopped
     if(e.frozen>0){e.frozen--;if(e.live&&!cpuTurn())actQ[1]=false;continue;}
     if(e.stopped>0){e.stopped--;continue;} // Timekeeper: paused, route resumes afterwards
