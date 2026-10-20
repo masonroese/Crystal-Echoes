@@ -498,7 +498,7 @@ function log(s,kind='info'){sim.log.push([sim.t,s,kind]);} // kind: 'score' | 'k
 
 function kill(o,by,how){
   if(!o.alive||invuln(o))return;
-  if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});sfx('block',o);return;} // Ben's shield
+  if(how!=='haunt'&&how!=='spectre'&&shielded(o,by.p)){fx('block',o.x,o.y,{c:COL[o.p],m:18});sfx('block',o);o.hurtT=sim.t;return;} // Ben's shield
   if(o.ch==='runner'){ // runners lose one crystal per hit and only go down with the last one
     if(o.hitCd>0)return; // half a second between hits, so one swing or touch can't strip them all
     if(o.carry.length>1){
@@ -507,10 +507,10 @@ function kill(o,by,how){
       fx('ko',o.x,o.y,{c:COL[o.p],m:20});sfx('ko',o);dropCrystals(o,1);return;
     }
   }
-  o.alive=false; o.frozen=0; if(o.p!==by.p)sim.kills[by.p]++; // friendly knockouts don't count
+  o.alive=false; o.frozen=0; o.koT=sim.t; if(o.p!==by.p)sim.kills[by.p]++; // friendly knockouts don't count
   const verb={slash:'slashed',arrow:'shot',haunt:'haunted',snipe:'sniped'}[how];
   log(how==='spectre'?`${ename(o)} touched a spectre from ${ename(by)}`:how==='mine'?`${ename(o)} stepped on a mine from ${ename(by)}`:`${ename(by)} ${verb} ${ename(o)}`,'ko');
-  fx('ko',o.x,o.y,{c:COL[o.p],m:30});sfx('ko',o);if(how==='haunt'||how==='spectre')sfx('haunt',by);
+  fx('ko',o.x,o.y,{c:COL[o.p],m:30});sfx('ko',o);if(how==='haunt'||how==='spectre')sfx('haunt',by);if(how==='haunt')by.actT=sim.t;
   if(o.carry.length)dropCrystals(o);
 }
 function dropCrystals(o,count){ // drops the whole stack, or just the top `count` crystals
@@ -551,7 +551,7 @@ function fireSniper(e){
   const victims=e.tier>=1?hits:hits.slice(0,1); // tier 1 pierces
   const end=victims.length&&e.tier<1?victims[0][0]:stop;
   victims.forEach(([,o])=>kill(o,e,'snipe'));
-  fx('tracer',e.x,e.y,{x2:e.x+dx*end,y2:e.y+dy*end,c:COL[e.p],m:16});sfx('snipe',e);
+  fx('tracer',e.x,e.y,{x2:e.x+dx*end,y2:e.y+dy*end,c:COL[e.p],m:16});sfx('snipe',e);e.actT=sim.t;
   if(!victims.length)log(`${ename(e)} fired and missed`);
 }
 function doAction(e){
@@ -559,22 +559,22 @@ function doAction(e){
   switch(e.ch){
     case 'ninja':{
       // start a 0.2 s swing: blade sweeps from straight behind, across the left side, to straight ahead
-      e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};sfx('slash',e);
+      e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};sfx('slash',e);e.actT=sim.t;
       break;}
     case 'ranger': case 'frost':{
       e.cd=c.cd; const sp=e.ch==='ranger'?16:5.5,ax=dcos(e.aim),ay=dsin(e.aim); // ranger arrow 30 tiles/s, fired along the aim
-      sim.proj.push({k:e.ch,x:e.x+ax*10,y:e.y+ay*10,vx:ax*sp,vy:ay*sp,p:e.p,by:e});sfx(e.ch==='ranger'?'arrow':'frostThrow',e);
+      sim.proj.push({k:e.ch,x:e.x+ax*10,y:e.y+ay*10,vx:ax*sp,vy:ay*sp,p:e.p,by:e});sfx(e.ch==='ranger'?'arrow':'frostThrow',e);e.actT=sim.t;
       break;}
     case 'ghost':
       if(e.tier<2||e.dropped)break; // tier 2: drop both spectres here, once per turn
       e.dropped=true;
       for(const sp of sim.spectres)if(sp.owner===e&&!sp.dropped){sp.dropped=true;sp.cx=e.x;sp.cy=e.y;}
-      fx('ice',e.x,e.y,{m:20});sfx('spectreDrop',e);log(`${ename(e)} dropped its spectres`);
+      fx('ice',e.x,e.y,{m:20});sfx('spectreDrop',e);e.actT=sim.t;log(`${ename(e)} dropped its spectres`);
       break;
     case 'ben':
       if(e.tier<2||e.dropped)break; // tier 2: drop a copy of the shield here, once per turn
       e.dropped=true;sim.shields.push({owner:e,r:SHIELD_R*2,x:e.x,y:e.y,dropped:true});
-      fx('block',e.x,e.y,{c:COL[e.p],m:24});sfx('shieldPlant',e);log(`${ename(e)} planted a shield`);
+      fx('block',e.x,e.y,{c:COL[e.p],m:24});sfx('shieldPlant',e);e.actT=sim.t;log(`${ename(e)} planted a shield`);
       break;
     case 'sniper':{ // instant bullet along the aim line, through walls
       if(sim.t<SNIPER_DELAY||e.shots>=(e.tier>=2?2:1))break; // no shots in the first 0.5 s of a turn
@@ -583,12 +583,12 @@ function doAction(e){
     case 'time':{ // stop echoes in place; they resume their routes afterwards
       e.cd=e.tier>=2?180:c.cd;const dur=e.tier>=1?120:60;let n=0;
       for(const o of sim.ents)if(o.alive&&!o.live&&o!==e&&o.ch!=='runner'&&(e.tier<2||o.p!==e.p)){o.stopped=Math.max(o.stopped,dur);o.swing=null;n++;} // runners ignore time stops
-      fx('timewave',e.x,e.y,{m:36});sfx('timeStop',e);log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
+      fx('timewave',e.x,e.y,{m:36});sfx('timeStop',e);e.actT=sim.t;log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
       break;}
-    case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); sfx('dash',e); break;
+    case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); sfx('dash',e); e.actT=sim.t; break;
     case 'trapper':
       if(e.mines>=maxMines(e))return;
-      e.mines++; e.cd=c.cd; const m={x:e.x,y:e.y,p:e.p,arm:30,by:e}; sim.mines.push(m); if(mineHeard(m))sfx('minePlace',e);
+      e.mines++; e.cd=c.cd; const m={x:e.x,y:e.y,p:e.p,arm:30,by:e}; sim.mines.push(m); if(mineHeard(m))sfx('minePlace',e); e.actT=sim.t;
       break;
   }
 }
@@ -655,7 +655,9 @@ function step(){
     let vx,vy;
     if(e.dash>0){e.dash--;const n=dhypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW*SPEED_MULT;vy=e.fy/n*6.5*SLOW*SPEED_MULT;}
     else{const n=dhypot(dx,dy)||1,sp=e.charge>=0&&!(e.ch==='ranger'&&e.tier>=1)?DRAW_SPEED:entSpeed(e); /* tier 1 Ranger isn't slowed */vx=dx/n*sp;vy=dy/n*sp;}
-    moveEnt(e,vx,vy);
+    const ox=e.x,oy=e.y;moveEnt(e,vx,vy);
+    if(e.x!==ox||e.y!==oy)e.mvT=sim.t; // walk animation
+    if(e.fx)e.faceL=e.fx<0;
     if(e.ch==='ranger'&&e.tier>=2){ // tier 2: fires on press, 0.5 s between shots
       if(act&&e.cd===0){doAction(e);e.cd=RANGER_T2_CD;}
     }else if(e.ch==='ranger'){ // press starts a charge, release fires it
@@ -1484,12 +1486,69 @@ function drawSprite(ctx,ch,p,t,opts){
   f.call(f,ctx,p,t);
 }
 
+/* ---------- character sprite sheets ----------
+   A character with a sheet at sprites/<character>.png is drawn from it; the others keep the figures above.
+   Add a character's name to SHEETS once its sheet is in place. Template and spec: art/sprite-template-guide.png.
+   Sheet: 432x192 PNG, 48x48 cells, art facing right (left is mirrored), cell centre = the character's position.
+     row 0: idle, damaged, death
+     row 1: walk right 1-3, walk up 1-3, walk down 1-3
+     row 2: walk up-right 1-3, walk down-right 1-3
+     row 3: attack right 1-3, attack up 1-3, attack down 1-3
+   Empty cells are allowed: the game falls back (diagonal walk -> walk right, attack up -> attack right, anything -> idle). */
+const SHEETS=[]; // e.g. ['ninja','ranger']
+const CELL=48, sheets={}; // character -> {img, filled: set of "col,row" cells that have art}
+let drawT=0; // tick of the turn being drawn, for animation timing
+for(const ch of SHEETS){
+  const img=new Image();
+  img.onload=()=>{
+    const filled=new Set();
+    try{
+      const c=document.createElement('canvas');c.width=img.width;c.height=img.height;const g=c.getContext('2d');g.drawImage(img,0,0);
+      for(let r=0;r<4;r++)for(let col=0;col<9;col++){
+        const d=g.getImageData(col*CELL,r*CELL,CELL,CELL).data;
+        for(let i=3;i<d.length;i+=4)if(d[i]){filled.add(col+','+r);break;}
+      }
+    }catch(e){for(let r=0;r<4;r++)for(let col=0;col<9;col++)filled.add(col+','+r);} // can't inspect it: assume every cell has art
+    sheets[ch]={img,filled};for(const k in PORTRAIT)if(k.startsWith(ch))delete PORTRAIT[k];
+  };
+  img.src=`sprites/${ch}.png`;
+}
+// which cell to show, and whether to mirror it for facing left
+function sheetCell(e){
+  const has=(c,r)=>sheets[e.ch].filled.has(c+','+r),pick=list=>list.find(([c,r])=>has(c,r))||[0,0];
+  const left=!!e.faceL;
+  if(!e.alive)return [...pick(e.koT!=null&&drawT-e.koT<12?[[1,0],[2,0]]:[[2,0],[1,0]]),left]; // a moment of "damaged", then death
+  if(e.frozen>0||(e.hurtT!=null&&drawT-e.hurtT<12))return [...pick([[1,0]]),left];
+  let k=null; // attack frame 0-2
+  if(e.ch==='ranger'&&e.charge>=0)k=e.charge>=CHARGE_MAX?1:0;
+  else if(e.swing)k=Math.min(2,(e.swing.t/4)|0);
+  else if(e.actT!=null&&drawT-e.actT<18)k=Math.min(2,((drawT-e.actT)/6)|0);
+  if(k!==null){ // attack towards the aim (Sniper, Ranger, Frostcaller) or the facing; diagonals use the side view
+    const aimed=e.ch==='sniper'||AIMS(e.ch),dx=aimed?dcos(e.aim):e.fx,dy=aimed?dsin(e.aim):e.fy,n=dhypot(dx,dy)||1;
+    const v=dy/n>.75?6:dy/n<-.75?3:0;
+    return [...pick([[v+k,3],[k,3]]),v?false:dx<0];
+  }
+  if(e.mvT!=null&&drawT-e.mvT<4){ // walking: 8 directions from the movement
+    const f=(drawT/8|0)%3,dir=!e.fy?'h':!e.fx?(e.fy<0?'u':'d'):(e.fy<0?'ur':'dr');
+    const cells={h:[[f,1]],u:[[3+f,1],[f,1]],d:[[6+f,1],[f,1]],ur:[[f,2],[f,1]],dr:[[3+f,2],[f,1]]}[dir];
+    return [...pick(cells),dir==='u'||dir==='d'?false:e.fx<0];
+  }
+  return [0,0,left];
+}
+function drawSheet(e){ // draws the current cell centred on the character
+  const [c,r,flip]=sheetCell(e);
+  ctx.save();if(flip)ctx.scale(-1,1);
+  if(e.tier&&e.alive){ctx.shadowColor=CRY;ctx.shadowBlur=e.tier*6;} // upgraded: a crystal glow
+  ctx.drawImage(sheets[e.ch].img,c*CELL,r*CELL,CELL,CELL,-CELL/2,-CELL/2,CELL,CELL);
+  ctx.restore();
+}
 // small portraits for the draft cards, rendered once per character and team
 const ART_SCALE=1.25; // figures drawn a little larger than their hitbox so details read on screen
 const PORTRAIT={};
 function portrait(k,p){
   const key=k+p;if(PORTRAIT[key])return PORTRAIT[key];
   const c=document.createElement('canvas');c.width=c.height=96;const g=c.getContext('2d');
+  if(sheets[k]){g.imageSmoothingEnabled=false;g.drawImage(sheets[k].img,0,0,CELL,CELL,0,0,96,96);return PORTRAIT[key]=c.toDataURL();} // idle frame
   g.translate(50,48);g.scale(3.5,3.5);drawSprite(g,k,p,400,{draw:.6});
   return PORTRAIT[key]=c.toDataURL();
 }
@@ -1501,6 +1560,7 @@ function drawEnt(e){
     ctx.strokeStyle='#11181a';ctx.lineWidth=2.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-4,0);ctx.lineTo(-1,3.5);ctx.lineTo(4.5,-3.5);ctx.stroke();
     ctx.restore();return;
   }
+  if(!e.alive&&sheets[e.ch]){ctx.globalAlpha=.55;drawSheet(e);ctx.restore();return;} // death frame, faded
   if(!e.alive){ // knocked out: faded figure with an X
     ctx.save();ctx.globalAlpha=.25;ctx.rotate(datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);drawSprite(ctx,e.ch,e.p,0);ctx.restore();
     ctx.globalAlpha=.5;ctx.strokeStyle=c;ctx.lineWidth=2;
@@ -1512,9 +1572,12 @@ function drawEnt(e){
   // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
   ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
   ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
-  ctx.save();ctx.rotate(e.ch==='sniper'||AIMS(e.ch)?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
-  drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
-  ctx.restore();
+  if(sheets[e.ch])drawSheet(e);
+  else{
+    ctx.save();ctx.rotate(e.ch==='sniper'||AIMS(e.ch)?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
+    drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
+    ctx.restore();
+  }
   if(e.charge>=0){ // bow charge meter
     const f=e.charge/CHARGE_MAX;ctx.strokeStyle=f>=1?'#ffffff':'#f4f7f5';ctx.lineWidth=f>=1?3:2;
     if(f>=1){ctx.shadowColor='#ffffff';ctx.shadowBlur=10;}
@@ -1533,10 +1596,11 @@ function drawEnt(e){
   ctx.globalAlpha=e.live?1:.8;
   ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillStyle=e.live?c:'#c3d0cc';
   const lbl=e.live?NAME[e.p].toUpperCase():e.ch==='runner'?'':'R'+(e.r+1);
-  ctx.fillText(lbl,0,-R-8);
+  const ly=sheets[e.ch]?-CELL/2:-R-8; // above the sprite's cell, or above the drawn figure
+  ctx.fillText(lbl,0,ly);
   if(e.tier){ // one small crystal per upgrade tier, after the label
     const w=ctx.measureText(lbl).width/2+6;ctx.fillStyle=CRY;
-    for(let i=0;i<e.tier;i++){const x=w+i*8;ctx.beginPath();ctx.moveTo(x,-R-16);ctx.lineTo(x+3,-R-12);ctx.lineTo(x,-R-8);ctx.lineTo(x-3,-R-12);ctx.closePath();ctx.fill();}
+    for(let i=0;i<e.tier;i++){const x=w+i*8;ctx.beginPath();ctx.moveTo(x,ly-8);ctx.lineTo(x+3,ly-4);ctx.lineTo(x,ly);ctx.lineTo(x-3,ly-4);ctx.closePath();ctx.fill();}
   }
   if(e.swing){ // swept area so far + the blade itself
     const sw=e.swing,a=swingAng(sw,sw.t),st=swingAng(sw,0);
@@ -1562,7 +1626,7 @@ function drawCrystal(x,y,scoredCol,sc,i,alpha=1){
   ctx.restore();
 }
 function draw(){
-  const v=view||IDLE;
+  const v=view||IDLE;drawT=v.t||0;
   ctx.fillStyle='#121a1b';ctx.fillRect(0,0,W,H);
   ctx.fillStyle='rgba(240,163,58,.07)';ctx.fillRect(T,T*4,T*3,T*10);
   ctx.fillStyle='rgba(90,162,255,.07)';ctx.fillRect(W-4*T,T*4,T*3,T*10);
