@@ -176,6 +176,7 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 .touchlayer{position:fixed;inset:0;z-index:3;touch-action:none}
 .ring{position:fixed;width:104px;height:104px;margin:-52px 0 0 -52px;border-radius:50%;border:2px solid rgba(231,238,233,.35);background:rgba(231,238,233,.06);pointer-events:none}
 .ring .knob{position:absolute;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;background:rgba(240,163,58,.8)}
+.ring.aim .knob{background:rgba(212,195,255,.85)}
 .tap{position:fixed;width:70px;height:70px;margin:-35px 0 0 -35px;border-radius:50%;background:rgba(212,195,255,.28);border:2px solid rgba(212,195,255,.6);pointer-events:none}
 .rotate{position:fixed;inset:0;z-index:9;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;background:var(--bg);font:600 18px var(--display);letter-spacing:.06em}
 @media (orientation:portrait){.rotate{display:flex}}
@@ -210,13 +211,14 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 <div class="touchlayer" id="touchLayer" hidden>
   <div class="ring" id="ring" hidden><div class="knob" id="knob"></div></div>
   <div class="tap" id="tap" hidden></div>
+  <div class="ring aim" id="aimRing" hidden><div class="knob" id="aimKnob"></div></div>
 </div>
 <div id="rules" hidden><ul class="rules">
         <li>Each round has two 10-second turns, one per player. The first turn alternates each round.</li>
         <li>On your turn only your character is live. Every earlier turn, from both players, replays as an echo repeating its exact inputs.</li>
-        <li>Every turn, each side sends out 2 runners. They walk from their own gate to the other side along fixed lanes, one along the top and one along the bottom. Both sides use the same lanes, mirrored. Each runner that reaches the far side scores 1 point for its side.</li>
-        <li>Runners can't fight back. They can be knocked out like any echo, and freezing one holds it up, so a runner that is delayed long enough won't make it before the turn ends. Time stops don't affect runners. Ben's shield protects his own runners.</li>
-        <li>One crystal starts each turn at the top of the center line. Carry it into the center ring for 1 point. A knocked-out carrier drops it.</li>
+        <li>Every turn, each side sends out 2 runners. They walk from their own gate to the other side along fixed lanes, one along the top and one along the bottom. Both sides use the same lanes, mirrored. Each runner carries a crystal. A runner that reaches the far side still holding its crystal scores 2 points for its side.</li>
+        <li>Runners can't fight back. Knock one out and it drops its crystal, which anyone can pick up and carry to the center ring for 1 point. Freezing a runner holds it up, so a runner that is delayed long enough won't make it before the turn ends. Time stops don't affect runners. Ben's shield protects his own runners.</li>
+        <li>One more crystal starts each turn at the top of the center line. Carry it into the center ring for 1 point. A knocked-out carrier drops whatever it holds.</li>
         <li>Catch-up: from round 4 on, a player who is 4 or more points behind gets 1 bonus crystal just inside their gate for that round. Anyone can take it.</li>
         <li>Scores are banked only at the end of each round, from the second turn. The first turn's scores are provisional, because that turn replays as an echo during the second.</li>
         <li>Turns always run the full 10 seconds, so you can record a route for later rounds.</li>
@@ -313,9 +315,12 @@ function runnerStep(e){
     if(d<=left){e.x=tx;e.y=ty;left-=d;e.wp++;}
     else{e.x+=dx/d*left;e.y+=dy/d*left;e.fx=dx/d;e.fy=dy/d;left=0;}
   }
-  if(e.wp>=e.route.length){ // made it across
-    e.alive=false;e.dormant=true;sim.score[e.p]++;
-    log(`${ename(e)} made it across`,'score');fx('grab',e.x,e.y,{c:COL[e.p],m:36});sfx('runnerHome',e);
+  if(e.wp>=e.route.length){ // made it across: a crystal it still holds is worth 2
+    e.alive=false;e.dormant=true;
+    if(!e.carry.length){log(`${ename(e)} made it across without its crystal`);return;}
+    for(const k of e.carry){k.scored=e.p;k.carrier=null;k.x=e.x;k.y=e.y-18;sim.score[e.p]+=2;}
+    e.carry=[];
+    log(`${ename(e)} brought its crystal across (worth 2)`,'score');fx('grab',e.x,e.y,{c:COL[e.p],m:36});sfx('runnerHome',e);
   }
 }
 const GOAL={x:480,y:288,r:34};
@@ -416,6 +421,8 @@ let state='setup', G=null, sim=null, view=null, prevSim=null;
 const opts={mode:matchMedia('(pointer:coarse)').matches?'cpu':'cpu',rounds:5};
 const keys={}, actQ={1:false,2:false}, touchDir=[0,0], touchVec=[0,0]; // touchVec: raw joystick direction (Sniper aim)
 let mouseAim=null; // canvas point the mouse is aiming at (Sniper), or null
+let stickAim=null,aimDown=false,aimLatch=0; // touch aim stick (Ranger, Frostcaller): angle while dragging, kept briefly after release so the shot uses it
+const AIMS=ch=>ch==='ranger'||ch==='frost'; // characters that aim with the second stick
 // input byte: direction (0-8) + 9 if action pressed this tick + 18 if action button is held
 const enc=(dx,dy,a,h)=>(dx+1)+(dy+1)*3+(a?9:0)+(h?18:0);
 const CHARGE_MAX=48; // 0.8 s full draw
@@ -446,9 +453,11 @@ function simFrom(ents,round,active,extra){
     spectres.push({owner:e,a:i*Math.PI,x:e.x+dcos(i*Math.PI)*SPEC_ORBIT,y:e.y+dsin(i*Math.PI)*SPEC_ORBIT,cx:0,cy:0,dropped:false});
   const shields=[]; // Ben Shieldon's bubbles
   for(const e of ents)if(e.ch==='ben')shields.push({owner:e,r:SHIELD_R*(e.tier>=1?2:1),x:e.x,y:e.y,dropped:false});
-  ents=ents.concat(mkRunners());
+  const runners=mkRunners();ents=ents.concat(runners);
+  const crystals=CRYSTALS.concat(bonusCrystals(round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0}));
+  for(const r of runners){const k={x:r.x,y:r.y,n:'runner',hx:r.x,hy:r.y,carrier:r,scored:0,runner:true};r.carry.push(k);crystals.push(k);} // each runner starts holding a crystal
   return {t:0,active,grid:BASE,ents,spectres,shields,proj:[],mines:[],fx:[],
-    crystals:CRYSTALS.concat(bonusCrystals(round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0})),delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'ready',endAt:null,...extra};
+    crystals,delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'ready',endAt:null,...extra};
 }
 function buildSim(){
   const ents=G.turns.map(tn=>mkEnt(tn.p,tn.r,tn.ch,false,tn.rec,tn.tier,tn.aimRec));
@@ -542,8 +551,8 @@ function doAction(e){
       e.cd=c.cd; e.swing={t:0,a0:datan2(e.fy,e.fx)};sfx('slash',e);
       break;}
     case 'ranger': case 'frost':{
-      e.cd=c.cd; const sp=e.ch==='ranger'?16:5.5; // ranger arrow 30 tiles/s
-      sim.proj.push({k:e.ch,x:e.x+e.fx/n*10,y:e.y+e.fy/n*10,vx:e.fx/n*sp,vy:e.fy/n*sp,p:e.p,by:e});sfx(e.ch==='ranger'?'arrow':'frostThrow',e);
+      e.cd=c.cd; const sp=e.ch==='ranger'?16:5.5,ax=dcos(e.aim),ay=dsin(e.aim); // ranger arrow 30 tiles/s, fired along the aim
+      sim.proj.push({k:e.ch,x:e.x+ax*10,y:e.y+ay*10,vx:ax*sp,vy:ay*sp,p:e.p,by:e});sfx(e.ch==='ranger'?'arrow':'frostThrow',e);
       break;}
     case 'ghost':
       if(e.tier<2||e.dropped)break; // tier 2: drop both spectres here, once per turn
@@ -626,6 +635,11 @@ function step(){
     if(e.cd>0)e.cd--;
     const held=code>=18,rest=code%18,act=rest>=9,c=rest%9,dx=c%3-1,dy=((c/3)|0)-1;
     if(dx||dy){e.fx=dx;e.fy=dy;}
+    if(AIMS(e.ch)){ // shots go where the aim stick points, or straight ahead; recorded so the echo aims the same way
+      if(e.live)e.aimRec[e.idx-1]=!cpuTurn()&&stickAim!==null?aimByte(stickAim):aimByte(datan2(e.fy,e.fx));
+      e.aim=e.aimRec[e.idx-1]/256*Math.PI*2;
+      if(e.live&&!aimDown&&aimLatch>0&&--aimLatch===0)stickAim=null;
+    }
     let vx,vy;
     if(e.dash>0){e.dash--;const n=dhypot(e.fx,e.fy);vx=e.fx/n*6.5*SLOW*SPEED_MULT;vy=e.fy/n*6.5*SLOW*SPEED_MULT;}
     else{const n=dhypot(dx,dy)||1,sp=e.charge>=0&&!(e.ch==='ranger'&&e.tier>=1)?DRAW_SPEED:entSpeed(e); /* tier 1 Ranger isn't slowed */vx=dx/n*sp;vy=dy/n*sp;}
@@ -977,7 +991,7 @@ function showSetup(){
   showOv(`<div class="panel">
     <p class="eyebrow">1v1 · Turn based · Runners and a crystal</p>
     <h2>Every turn, your past selves run it back.</h2>
-    <p>Players take 10-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Each turn both sides send 2 runners across the arena, worth 1 point each if they make it. Protect yours, stop theirs, and carry the crystal to the center ring for a bonus point.</p>
+    <p>Players take 10-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Each turn both sides send 2 runners across the arena, each carrying a crystal worth 2 points if it makes it. Protect yours, stop theirs, and carry loose crystals to the center ring for 1 point.</p>
     <p class="note">Before each turn you draft a character you haven't used yet.</p>
     <div class="opts">
       <div class="opt"><span>Opponent</span><div class="seg" data-k="mode"><button type="button" data-v="cpu">Computer</button><button type="button" data-v="2p">Second player</button></div></div>
@@ -1180,10 +1194,19 @@ addEventListener('keyup',ev=>{keys[ev.key.toLowerCase()]=false;});
 addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
 document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
 
-/* ---------- touch: drag anywhere on the left half to move, touch the right half to act ---------- */
+/* ---------- touch: drag anywhere on the left half to move, touch the right half to act ----------
+   Ranger and Frostcaller: the right half is an aim stick. Drag to aim, let go to fire (a tap fires straight ahead).
+   The Ranger draws its bow while the stick is held, as with the button. */
 let touchHeld=false;
-const tl=$('touchLayer'),ring=$('ring'),knob=$('knob'),tap=$('tap');
-let moveId=null,actId=null,ox=0,oy=0;
+const tl=$('touchLayer'),ring=$('ring'),knob=$('knob'),tap=$('tap'),aimRing=$('aimRing'),aimKnob=$('aimKnob');
+let moveId=null,actId=null,ox=0,oy=0,ax0=0,ay0=0;
+const liveAimer=()=>{const e=state==='play'&&sim&&!cpuTurn()?sim.ents.find(x=>x.live):null;return e&&AIMS(e.ch)?e:null;};
+const fireOnRelease=e=>e.ch==='frost'||e.tier>=2; // Frostcaller and tier 2 Ranger shoot when the stick is let go
+function aimTo(x,y){
+  const dx=x-ax0,dy=y-ay0,d=Math.hypot(dx,dy),m=Math.min(d,44);
+  aimKnob.style.transform=d?`translate(${dx/d*m}px,${dy/d*m}px)`:'';
+  if(d>=12)stickAim=Math.atan2(dy,dx); // recorded as an aim byte each tick, so echoes replay it exactly
+}
 function stickTo(x,y){
   const dx=x-ox,dy=y-oy,d=Math.hypot(dx,dy),m=Math.min(d,44);
   touchVec[0]=d?dx/d:0;touchVec[1]=d?dy/d:0; // raw direction for the Sniper's free aim
@@ -1201,17 +1224,31 @@ tl.addEventListener('pointerdown',ev=>{
     ring.style.left=ox+'px';ring.style.top=oy+'px';ring.hidden=false;knob.style.transform='';
   }else{
     if(actId!==null)return;
-    actId=ev.pointerId;touchHeld=true;if(state==='play')actQ[1]=true;
+    actId=ev.pointerId;
+    const ae=liveAimer();
+    if(ae){
+      aimDown=true;aimLatch=0;stickAim=null;ax0=ev.clientX;ay0=ev.clientY;
+      aimRing.style.left=ax0+'px';aimRing.style.top=ay0+'px';aimRing.hidden=false;aimKnob.style.transform='';
+      if(!fireOnRelease(ae)){touchHeld=true;actQ[1]=true;} // Ranger starts drawing
+      return;
+    }
+    touchHeld=true;if(state==='play')actQ[1]=true;
     tap.style.left=ev.clientX+'px';tap.style.top=ev.clientY+'px';tap.hidden=false;
   }
 });
-tl.addEventListener('pointermove',ev=>{if(ev.pointerId===moveId)stickTo(ev.clientX,ev.clientY);});
+tl.addEventListener('pointermove',ev=>{if(ev.pointerId===moveId)stickTo(ev.clientX,ev.clientY);else if(ev.pointerId===actId&&aimDown)aimTo(ev.clientX,ev.clientY);});
 function touchEnd(ev){
   if(ev.pointerId===moveId){moveId=null;touchDir[0]=touchDir[1]=0;touchVec[0]=touchVec[1]=0;ring.hidden=true;}
-  if(ev.pointerId===actId){actId=null;touchHeld=false;tap.hidden=true;}
+  if(ev.pointerId===actId){
+    actId=null;touchHeld=false;tap.hidden=true;
+    if(aimDown){ // let go of the aim stick: keep the aim for the shot, fire if this character shoots on release
+      aimDown=false;aimLatch=2;aimRing.hidden=true;
+      const ae=liveAimer();if(ae&&fireOnRelease(ae))actQ[1]=true;
+    }
+  }
 }
 tl.addEventListener('pointerup',touchEnd);tl.addEventListener('pointercancel',touchEnd);
-function releaseTouch(){moveId=actId=null;touchHeld=false;touchDir[0]=touchDir[1]=0;touchVec[0]=touchVec[1]=0;ring.hidden=true;tap.hidden=true;}
+function releaseTouch(){moveId=actId=null;touchHeld=false;touchDir[0]=touchDir[1]=0;touchVec[0]=touchVec[1]=0;ring.hidden=true;tap.hidden=true;aimDown=false;aimLatch=0;stickAim=null;aimRing.hidden=true;}
 
 /* ---------- rendering ---------- */
 const cv=$('cv'),ctx=cv.getContext('2d');
@@ -1420,7 +1457,7 @@ function drawEnt(e){
   // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
   ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
   ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
-  ctx.save();ctx.rotate(e.ch==='sniper'?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
+  ctx.save();ctx.rotate(e.ch==='sniper'||AIMS(e.ch)?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
   drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
   ctx.restore();
   if(e.charge>=0){ // bow charge meter
@@ -1493,7 +1530,7 @@ function draw(){
   ctx.restore();
   ctx.fillStyle='rgba(212,195,255,.6)';ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillText('SCORE',GOAL.x,GOAL.y+GOAL.r+14);
   // crystal pedestals
-  for(const c of v.crystals.map(k=>({x:k.hx,y:k.hy}))){ctx.strokeStyle='rgba(212,195,255,.25)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(c.x,c.y,18,0,Math.PI*2);ctx.stroke();}
+  for(const c of v.crystals.filter(k=>!k.runner).map(k=>({x:k.hx,y:k.hy}))){ctx.strokeStyle='rgba(212,195,255,.25)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(c.x,c.y,18,0,Math.PI*2);ctx.stroke();}
   // runner lanes
   ctx.save();ctx.lineWidth=2;ctx.setLineDash([2,10]);ctx.lineCap='round';ctx.strokeStyle='rgba(231,238,233,.13)';
   for(const bottom of [false,true]){const l=laneFor(1,bottom);ctx.beginPath();ctx.moveTo(l[0][0],l[0][1]);for(const [x,y] of l.slice(1))ctx.lineTo(x,y);ctx.stroke();}
@@ -1521,6 +1558,11 @@ function draw(){
   // entities
   const es=[...v.ents].sort((a,b)=>(a.alive-b.alive)||(a.live-b.live));
   es.forEach(drawEnt);
+  if(stickAim!==null&&aimDown&&state==='play'){ // touch aim stick: show where the shot will go
+    const e=v.ents.find(x=>x.live&&x.alive&&AIMS(x.ch));
+    if(e){const dx=dcos(e.aim),dy=dsin(e.aim);ctx.save();ctx.strokeStyle=e.ch==='frost'?'#bfe9ff':COL[e.p];ctx.globalAlpha=.8;ctx.lineWidth=1.5;ctx.setLineDash([8,6]);
+      ctx.beginPath();ctx.moveTo(e.x+dx*16,e.y+dy*16);ctx.lineTo(e.x+dx*240,e.y+dy*240);ctx.stroke();ctx.restore();}
+  }
   for(const e of v.ents){ // Sniper aim lines (only while it still has a shot)
     if(e.ch!=='sniper'||!e.alive||e.shots>=(e.tier>=2?2:1))continue;
     const dx=dcos(e.aim),dy=dsin(e.aim),L=rayExit(e.x,e.y,dx,dy);
@@ -1580,7 +1622,7 @@ function draw(){
     ctx.fillText(cpuTurn()?`Tap or click to watch ${NAME[ap]}'s turn`:'Tap, click or press Space to start',480,280);ctx.globalAlpha=1;
     ctx.fillStyle='#c3d0cc';ctx.font='500 15px Barlow, sans-serif';
     const n=G.turns.length;
-    if(!cpuTurn()){ctx.fillStyle='#8a9d99';ctx.fillText('Left side: drag to move. Right side: touch to act (hold to draw the bow).',480,408);ctx.fillStyle='#c3d0cc';}
+    if(!cpuTurn()){ctx.fillStyle='#8a9d99';ctx.fillText(AIMS(G.picks[ap][G.round])?'Left side: drag to move. Right side: drag to aim, let go to fire.':'Left side: drag to move. Right side: touch to act.',480,408);ctx.fillStyle='#c3d0cc';}
     ctx.fillText(n?`${n} echo${n>1?'es':''} will replay. ${G.half?`This turn decides round ${G.round+1}'s score.`:'Scores this turn are provisional.'}`:'No echoes yet. Everything you do now replays on every later turn.',480,384);
     if(live)drawEnt(live); // redraw the live character above the dimming so it stands out
   }
