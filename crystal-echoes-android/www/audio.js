@@ -3,7 +3,7 @@
    window.CEAudio:
      sfx(name,{pan,vol})   play a sound effect (pan -1..1, vol 0..1)
      preview(characterKey) play that character's signature sound (draft cards)
-     music(song,ducked)    'menu' (lo-fi hip hop) or 'game' (the same song, rock version); safe to call every frame
+     music(song,ducked)    'menu' (lo-fi hip hop) or 'game' (industrial drum and bass); safe to call every frame
      prefs / setPref(k,v)  music, sfx and muted switches, remembered on this device
    Browsers only allow sound after the first tap or key press, so nothing plays until then. */
 (()=>{
@@ -13,7 +13,7 @@ const prefs={music:true,sfx:true,muted:false};
 try{Object.assign(prefs,JSON.parse(localStorage.getItem(PREF_KEY)||'{}'));}catch(e){}
 const savePrefs=()=>{try{localStorage.setItem(PREF_KEY,JSON.stringify(prefs));}catch(e){}};
 
-const MUSIC_VOL=.5, SFX_VOL=.9, DUCK=.35; // music drops to 35% while paused
+const MUSIC_VOL=.3, SFX_VOL=.9, DUCK=.35; // music drops to 35% while paused
 let ctx=null,out,musicBus,sfxBus,noiseBuf,player=null,wantSong=null,ducked=false;
 const mtof=m=>440*Math.pow(2,(m-69)/12);
 
@@ -115,6 +115,7 @@ const SFX={
   go(d,t){tone(d,t,{f:150,f2:50,dur:.25,vol:.5});tone(d,t,{type:'triangle',f:440,f2:880,dur:.25,vol:.1});[659,880,1319].forEach((f,i)=>tone(d,t+.1+i*.05,{f,dur:.35,vol:.06}));},
   turnEnd(d,t){[1,2.76,5.4].forEach((m,i)=>tone(d,t,{f:523*m,dur:1.4/(i+1),vol:.14/(i+1)}));},
   fanfare(d,t){[523,659,784,1047].forEach((f,i)=>tone(d,t+i*.12,{type:'triangle',f,dur:i===3?.9:.25,vol:.13}));for(const f of [523,659,784])tone(d,t+.48,{f,dur:.9,vol:.05});},
+  runnerHome(d,t){[784,988,1319].forEach((f,i)=>tone(d,t+i*.05,{type:'square',f,dur:.12,vol:.05}));tone(d,t,{f:392,dur:.3,vol:.12});},
   click(d,t){tone(d,t,{f:880,dur:.035,vol:.06});}
 };
 const SIGNATURE={ninja:'slash',ranger:'arrow',ghost:'haunt',sprinter:'dash',trapper:'minePlace',frost:'frostThrow',ben:'block',time:'timeStop',sniper:'snipe'};
@@ -131,8 +132,9 @@ function sfx(name,o){
 }
 
 /* ---------- music ----------
-   One song in two arrangements. Both loop the same 8 bars and melody:
-   menu = lo-fi hip hop (76 BPM, swung, electric piano, vinyl crackle), game = rock (150 BPM, distorted guitars). */
+   Both songs loop 8 bars.
+   menu = lo-fi hip hop (76 BPM, swung, electric piano, vinyl crackle)
+   game = industrial drum and bass (172 BPM, distorted two-step drums, metal clanks, growling reese bass) */
 const PROG=[ // one chord per bar: bass root and a voicing (MIDI notes)
   {r:38,v:[53,57,60,64]}, // Dm9
   {r:43,v:[53,57,59,64]}, // G13
@@ -175,46 +177,30 @@ function softLead(p,t,m,dur,v){ // breathy, flute-like melody
 }
 function softBass(d,t,m,dur,v){tone(d,t,{f:mtof(m),dur,a:.012,vol:v});tone(d,t,{type:'triangle',f:mtof(m),dur:dur*.6,a:.012,vol:v*.25});}
 
-// rock instruments
+// drum and bass instruments
 function distCurve(k){const n=2048,c=new Float32Array(n);for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=(1+k)*x/(1+k*Math.abs(x));}return c;}
-function guitarAmp(dest,drive,toneHz,vol,echo){ // input -> overdrive -> cabinet filters -> output (+ optional echo)
-  const pre=ctx.createGain(),sh=ctx.createWaveShaper(),hp=ctx.createBiquadFilter(),lp=ctx.createBiquadFilter(),mid=ctx.createBiquadFilter(),post=ctx.createGain();
-  pre.gain.value=4;sh.curve=distCurve(drive);sh.oversample='4x';
-  hp.type='highpass';hp.frequency.value=110;
-  lp.type='lowpass';lp.frequency.value=toneHz;lp.Q.value=.8;
-  mid.type='peaking';mid.frequency.value=750;mid.Q.value=1;mid.gain.value=-4;
-  post.gain.value=vol;
-  pre.connect(sh);sh.connect(hp);hp.connect(mid);mid.connect(lp);lp.connect(post);post.connect(dest);
-  if(echo){
-    const dl=ctx.createDelay(1),fb=ctx.createGain(),wet=ctx.createGain();
-    dl.delayTime.value=echo;fb.gain.value=.3;wet.gain.value=.35;
-    post.connect(dl);dl.connect(fb);fb.connect(dl);dl.connect(wet);wet.connect(dest);
-  }
-  return pre;
+function driveBus(dest,k,vol){ // waveshaper grit; returns the input
+  const sh=ctx.createWaveShaper(),post=ctx.createGain();
+  sh.curve=distCurve(k);sh.oversample='2x';post.gain.value=vol;sh.connect(post);post.connect(dest);return sh;
 }
-function gVoice(dest,t,f,detune,dur,v,rel,type){ // sustained oscillator for guitar notes
+function gVoice(dest,t,f,detune,dur,v,rel,type){ // sustained oscillator note
   const o=ctx.createOscillator(),g=ctx.createGain();
   o.type=type||'sawtooth';o.frequency.value=f;o.detune.value=detune;
   g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v,t+.004);g.gain.setValueAtTime(v,t+dur);g.gain.exponentialRampToValueAtTime(1e-4,t+dur+rel);
   o.connect(g);g.connect(dest);o.start(t);o.stop(t+dur+rel+.05);
   return o;
 }
-function powerChord(p,t,root,dur,muted){ // root, fifth and octave, two slightly detuned strings each
-  let dest=p.rhythm;
-  if(muted){const lp=ctx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=900;lp.connect(p.rhythm);dest=lp;}
-  for(const m of [root,root+7,root+12])for(const dt of [-7,7])gVoice(dest,t,mtof(m),dt,dur,muted?.12:.1,muted?.03:.08);
+function dnbKick(d,t,v){tone(d,t,{f:190,f2:48,dur:.22,a:.001,vol:v});noise(d,t,{type:'highpass',f:3000,dur:.012,a:.001,vol:v*.4});}
+function dnbSnare(d,t,v){noise(d,t,{f:1900,q:.7,dur:.17,a:.001,vol:v});tone(d,t,{type:'triangle',f:240,f2:170,dur:.07,vol:v*.7});noise(d,t,{type:'highpass',f:5000,dur:.08,vol:v*.35});}
+function clank(d,t,v){ // industrial metal hit: clashing square partials and a ringing noise ping
+  for(const [f,k] of [[317,1],[732,.7],[1183,.5],[1876,.35]])tone(d,t,{type:'square',f,dur:.09+.12*k,a:.001,vol:v*k*.25});
+  noise(d,t,{f:2600,q:14,dur:.12,a:.001,vol:v*.9});
 }
-function leadNote(p,t,m,dur){ // bends up into each note, with vibrato
-  for(const dt of [-5,5]){
-    const o=gVoice(p.lead,t,mtof(m),dt,dur,.11,.12);
-    o.frequency.setValueAtTime(mtof(m-1),t);o.frequency.exponentialRampToValueAtTime(mtof(m),t+.05);
-    lfoTo(p.vib,o);
-  }
+function reese(p,t,m,dur,v){ // two detuned saws through a moving low-pass, plus a clean sub
+  for(const dt of [-14,14])gVoice(p.bass,t,mtof(m),dt,dur,v,.06);
+  gVoice(p.g,t,mtof(m),0,dur,v*1.4,.06,'sine');
 }
-function rockBass(d,t,m,dur,v){
-  const lp=ctx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=800;lp.connect(d);
-  gVoice(lp,t,mtof(m),0,dur,v,.05);gVoice(d,t,mtof(m),0,dur,v*.6,.05,'sine');
-}
+const DNB_BASS=[38,38,34,36,38,38,41,40]; // D D Bb C D D F E
 
 const SONGS={
   menu:{bpm:76,swing:.28,vol:1.5,
@@ -239,29 +225,29 @@ const SONGS={
       if(p.pass%3!==0)(MEL_AT[bar*16+st]||[]).forEach(([m,l])=>softLead(p,t,m,sd*l,.06)); // melody 2 times out of 3
       if(Math.random()<.08)noise(p.g,t+Math.random()*sd,{type:'highpass',f:2000,dur:.006,a:.001,vol:.04+Math.random()*.06}); // crackle pops
     }},
-  game:{bpm:150,swing:0,vol:.55,
+  game:{bpm:172,swing:0,vol:.6,
     setup(p){
-      p.drums=ctx.createGain();p.drums.connect(p.g);
-      p.rhythm=guitarAmp(p.g,40,3600,.2);
-      p.lead=guitarAmp(p.g,70,4200,.15,p.sd*3);
-      p.lfo=ctx.createOscillator();p.lfo.frequency.value=5.5;p.vib=ctx.createGain();p.vib.gain.value=14;
-      p.lfo.connect(p.vib);p.lfo.start();
+      p.kit=driveBus(p.g,6,.55); // the whole drum kit runs through a little distortion
+      const lp=ctx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=420;lp.Q.value=6;
+      p.lfo=ctx.createOscillator();p.lfo.frequency.value=172/60/2;const depth=ctx.createGain();depth.gain.value=280; // filter wobbles every 2 beats
+      p.lfo.connect(depth);depth.connect(lp.frequency);p.lfo.start();
+      p.bass=ctx.createGain();p.bass.connect(lp);lp.connect(driveBus(p.g,3,.5));
       p.stopAll=()=>p.lfo.stop();
     },
     play(p,t,bar,st){
-      const c=PROG[bar],sd=p.sd,dr=p.drums;
-      if(st===0&&bar%4===0)crash(dr,t,.18);
-      if(bar===7&&st>=12)snare(dr,t,.3+.06*(st-12)); // fill back to the top
-      else{
-        if(st===0||st===8||st===10||(st===14&&bar%2))kick(dr,t,.75);
-        if(st===4||st===12)snare(dr,t,.45);
+      const sd=p.sd,k=p.kit;
+      if(bar===7&&st>=8){if(st%2===0||st>=12)dnbSnare(k,t,.25+.03*(st-8));} // snare roll back to the top
+      else{ // two-step: kick on 1 and the "and" of 3, snare on 2 and 4, ghost snares in odd bars
+        if(st===0||st===10)dnbKick(k,t,.9);
+        if(st===4||st===12)dnbSnare(k,t,.6);
+        if(bar%2&&(st===7||st===9))dnbSnare(k,t,.12);
       }
-      if(st%2===0)hat(dr,t,st%4?.06:.1,st===14);
-      if(st%2===0)rockBass(p.g,t,c.r,sd*1.8,.22);
-      const root=c.r<40?c.r+12:c.r; // keep chords in guitar range
-      if(st===0||st===10)powerChord(p,t,root,sd*(st===0?3.5:2),false);
-      else if(st%2===0&&st!==2)powerChord(p,t,root,sd*.8,true); // palm-muted chugs
-      (MEL_AT[bar*16+st]||[]).forEach(([m,l])=>leadNote(p,t,m,sd*l));
+      hat(k,t,st%4===2?.09:st%2?.03:.05,st===2&&bar%2===1);
+      if((st===6&&bar%2===0)||(st===14&&bar%4===3))clank(k,t,.5);
+      if(st===0&&bar%4===0)crash(k,t,.12);
+      const r=DNB_BASS[bar];
+      if(st===0)reese(p,t,r,sd*9,.12);
+      if(st===10)reese(p,t,r,sd*5,.12);
     }}
 };
 const BARS=8,STEPS=BARS*16;

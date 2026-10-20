@@ -214,10 +214,12 @@ body{display:flex;align-items:center;justify-content:center;touch-action:none;fo
 <div id="rules" hidden><ul class="rules">
         <li>Each round has two 10-second turns, one per player. The first turn alternates each round.</li>
         <li>On your turn only your character is live. Every earlier turn, from both players, replays as an echo repeating its exact inputs.</li>
-        <li>Four crystals start each turn: top and bottom of the center line, the top-left corner (Amber's side) and the bottom-right corner (Cobalt's side). Carry them into the center ring. A character can carry several at once and delivers them all together. Deliveries by either side count for that side. A knocked-out carrier drops everything it holds.</li>
-        <li>Catch-up: from round 3 on, a player who is 2 or more crystals behind gets a bonus crystal just inside their gate for that round. 4 or more behind gets 2. Anyone can take them.</li>
-        <li>Scores are banked only at the end of each round, from the second turn. The first turn's deliveries are provisional, because that turn replays as an echo during the second.</li>
-        <li>Turns run the full 10 seconds even after every crystal is delivered, so you can record a route for later rounds. A turn ends early only if every character is knocked out.</li>
+        <li>Every turn, each side sends out 2 runners. They walk from their own gate to the other side along fixed lanes, one along the top and one along the bottom. Both sides use the same lanes, mirrored. Each runner that reaches the far side scores 1 point for its side.</li>
+        <li>Runners can't fight back. They can be knocked out like any echo, and freezing one holds it up, so a runner that is delayed long enough won't make it before the turn ends. Time stops don't affect runners. Ben's shield protects his own runners.</li>
+        <li>One crystal starts each turn at the top of the center line. Carry it into the center ring for 1 point. A knocked-out carrier drops it.</li>
+        <li>Catch-up: from round 4 on, a player who is 4 or more points behind gets 1 bonus crystal just inside their gate for that round. Anyone can take it.</li>
+        <li>Scores are banked only at the end of each round, from the second turn. The first turn's scores are provisional, because that turn replays as an echo during the second.</li>
+        <li>Turns always run the full 10 seconds, so you can record a route for later rounds.</li>
         <li>Before each turn, draft a character you haven't used yet. Trappers can't carry crystals.</li>
         <li>In the draft you can spend banked crystals to upgrade the character you pick: 1 crystal for Tier 1, 1 more for Tier 2. Spent crystals come off your score. The upgrade also applies to that character's echoes. Each player starts with 2 crystals.</li>
         <li>Friendly fire applies only to Trapper mines and Frostcaller bolts, which hit your own echoes too. Friendly knockouts don't count toward the tiebreak.</li>
@@ -276,20 +278,46 @@ const LEFT=[
 "###############"];
 const BASE=new Uint8Array(COLS*ROWS);
 LEFT.forEach((row,r)=>{const full=row+[...row].reverse().join('');for(let c=0;c<COLS;c++)BASE[r*COLS+c]=full[c]==='#'?1:0;});
-const CRYSTALS=[{x:480,y:80,n:'north'},{x:480,y:496,n:'south'},{x:48,y:48,n:'top-left corner'},{x:912,y:528,n:'bottom-right corner'}];
-// catch-up crystals, placed just inside a trailing player's gate (from round 3 on)
-const BONUS_SPOTS={1:[[176,288]],2:[[176,256],[176,320]]};
+const CRYSTALS=[{x:480,y:80,n:'top'}];
+// catch-up crystal, placed just inside a trailing player's gate (from round 4 on)
+const BONUS_SPOTS={1:[[176,288]]};
 function bonusCrystals(r){
   const b=G&&G.bonus&&G.bonus[r];if(!b)return [];
   const out=[];
   for(const p of [1,2])(BONUS_SPOTS[b[p]]||[]).forEach(([x,y])=>out.push({x:p===1?x:W-x,y,n:NAME[p]+' bonus'}));
   return out;
 }
-function computeBonus(r){ // down by 2+ -> 1 crystal, down by 4+ -> 2
-  const b={};for(const p of [1,2]){const d=G.total[3-p]-G.total[p];b[p]=d>=4?2:d>=2?1:0;}
+function computeBonus(r){ // down by 4+ -> 1 crystal
+  const b={};for(const p of [1,2]){const d=G.total[3-p]-G.total[p];b[p]=d>=4?1:0;}
   G.bonus[r]=b;return b;
 }
 const bonusText=b=>[1,2].filter(p=>b&&b[p]).map(p=>`${b[p]} bonus crystal${b[p]>1?'s':''} near ${NAME[p]}'s gate`).join(' and ');
+/* ---------- runners: 2 per side, walking fixed lanes to the other side; 1 point each on arrival ----------
+   Amber's top lane is drawn here; the bottom lane mirrors it top to bottom, and Cobalt's lanes mirror Amber's left to right. */
+const LANE=[[48,208],[304,208],[304,48],[656,48],[656,208],[912,208]];
+const RUNNER_SPEED=2.5; // px per tick (4.7 tiles/s): about 7.9 s from end to end, so a long freeze or time stop costs the point
+const laneFor=(p,bottom)=>LANE.map(([x,y])=>[p===1?x:W-x,bottom?H-y:y]);
+function mkRunners(){
+  const out=[];
+  for(const p of [1,2])for(const bottom of [false,true]){
+    const e=mkEnt(p,0,'runner',false),route=laneFor(p,bottom);
+    e.x=route[0][0];e.y=route[0][1];e.route=route;e.wp=1;e.fx=p===1?1:-1;e.fy=0;e.trail=[];
+    out.push(e);
+  }
+  return out;
+}
+function runnerStep(e){
+  let left=RUNNER_SPEED;
+  while(left>0&&e.wp<e.route.length){
+    const [tx,ty]=e.route[e.wp],dx=tx-e.x,dy=ty-e.y,d=dhypot(dx,dy);
+    if(d<=left){e.x=tx;e.y=ty;left-=d;e.wp++;}
+    else{e.x+=dx/d*left;e.y+=dy/d*left;e.fx=dx/d;e.fy=dy/d;left=0;}
+  }
+  if(e.wp>=e.route.length){ // made it across
+    e.alive=false;e.dormant=true;sim.score[e.p]++;
+    log(`${ename(e)} made it across`,'score');fx('grab',e.x,e.y,{c:COL[e.p],m:36});sfx('runnerHome',e);
+  }
+}
 const GOAL={x:480,y:288,r:34};
 const SLOW=0.64; // movement scale: 80% x 80%
 const SPEED_MULT=2; // everyone (and every speed buff) moves twice as fast
@@ -375,7 +403,8 @@ const CH={
  trapper:{name:'Trapper',role:'Area denial',speed:3.7333,cd:36,noCarry:true,text:'The fastest character, but cannot pick up crystals. Drops 1 mine per turn that knocks out the first other character to touch it. Mines blink red.'},
  ben:{name:'Ben Shieldon',role:'Guardian',speed:2.5,cd:0,text:'Always surrounded by a 1-tile shield bubble. Enemy attacks and freezes can’t reach him or any teammate inside it. Ghosts and spectres pass straight through. No action button until Tier 2.'},
  sniper:{name:'Sniper',role:'Marksman',speed:0,cd:20,shots:1,text:'Can’t move. Aim the rifle in any direction; a line shows the aim. Press to fire: the bullet is instant, goes through walls, and hits the first enemy in its path. 1 shot per turn.'},
- time:{name:'Timekeeper',role:'Time-bender',speed:2.2,cd:300,text:'Stops every echo on the map, both teams, for 1 second. Stopped echoes pick up their routes exactly where they left off. The live character keeps moving.'},
+ time:{name:'Timekeeper',role:'Time-bender',speed:2.2,cd:300,text:'Stops every echo on the map, both teams, for 1 second (runners keep going). Stopped echoes pick up their routes exactly where they left off. The live character keeps moving.'},
+ runner:{name:'Runner',role:'NPC',speed:0,cd:0,noCarry:true,text:'Walks its lane to the other side.'},
  frost:{name:'Frostcaller',role:'Disruptor',speed:2.2,cd:84,text:'Throw a frost bolt that freezes the first character it hits for 2.5 seconds. Each character can only be frozen once per turn; bolts pass through anyone already frozen. A frozen echo resumes its route where it stopped.'}
 };
 const ORDER=['ninja','ranger','ghost','sprinter','trapper','frost','ben','time','sniper'];
@@ -392,7 +421,7 @@ const enc=(dx,dy,a,h)=>(dx+1)+(dy+1)*3+(a?9:0)+(h?18:0);
 const CHARGE_MAX=48; // 0.8 s full draw
 const DRAW_SPEED=32/60*SPEED_MULT; // 2 tiles/s while drawing
 const pname=p=>NAME[p]+(G&&G.mode==='cpu'&&p===2?' (CPU)':'');
-const ename=e=>`${NAME[e.p]}'s ${CH[e.ch].name}${e.live?'':' echo'}`;
+const ename=e=>`${NAME[e.p]}'s ${CH[e.ch].name}${e.live||e.ch==='runner'?'':' echo'}`;
 const stamp=t=>(t/60).toFixed(1)+'s';
 /* ---------- sound (audio.js) ---------- */
 const A=window.CEAudio||{sfx(){},preview(){},music(){},prefs:{},setPref(){}};
@@ -417,6 +446,7 @@ function simFrom(ents,round,active,extra){
     spectres.push({owner:e,a:i*Math.PI,x:e.x+dcos(i*Math.PI)*SPEC_ORBIT,y:e.y+dsin(i*Math.PI)*SPEC_ORBIT,cx:0,cy:0,dropped:false});
   const shields=[]; // Ben Shieldon's bubbles
   for(const e of ents)if(e.ch==='ben')shields.push({owner:e,r:SHIELD_R*(e.tier>=1?2:1),x:e.x,y:e.y,dropped:false});
+  ents=ents.concat(mkRunners());
   return {t:0,active,grid:BASE,ents,spectres,shields,proj:[],mines:[],fx:[],
     crystals:CRYSTALS.concat(bonusCrystals(round)).map(c=>({...c,hx:c.x,hy:c.y,carrier:null,scored:0})),delivered:0,score:{1:0,2:0},kills:{1:0,2:0},log:[],phase:'ready',endAt:null,...extra};
 }
@@ -532,7 +562,7 @@ function doAction(e){
       break;}
     case 'time':{ // stop echoes in place; they resume their routes afterwards
       e.cd=e.tier>=2?180:c.cd;const dur=e.tier>=1?120:60;let n=0;
-      for(const o of sim.ents)if(o.alive&&!o.live&&o!==e&&(e.tier<2||o.p!==e.p)){o.stopped=Math.max(o.stopped,dur);o.swing=null;n++;}
+      for(const o of sim.ents)if(o.alive&&!o.live&&o!==e&&o.ch!=='runner'&&(e.tier<2||o.p!==e.p)){o.stopped=Math.max(o.stopped,dur);o.swing=null;n++;} // runners ignore time stops
       fx('timewave',e.x,e.y,{m:36});sfx('timeStop',e);log(`${ename(e)} stopped time for ${n} echo${n===1?'':'es'}`);
       break;}
     case 'sprinter': e.cd=e.tier>=2?DASH_CD_T2:c.cd; e.dash=12; fx('dash',e.x,e.y,{c:COL[e.p],m:14}); sfx('dash',e); break;
@@ -584,6 +614,7 @@ function step(){
     // frozen characters pause their own input clock, so an echo resumes its route where it stopped
     if(e.frozen>0){e.frozen--;if(e.live&&!cpuTurn())actQ[1]=false;continue;}
     if(e.stopped>0){e.stopped--;continue;} // Timekeeper: paused, route resumes afterwards
+    if(e.ch==='runner'){runnerStep(e);continue;}
     let code;
     if(e.live){code=cpuTurn()?aiInput(e,t):humanInput();e.rec[e.idx]=code;}
     else code=e.rec[e.idx];
@@ -682,7 +713,6 @@ function step(){
   tickFx();
   sim.t++;
   if(sim.t===TICKS-180||sim.t===TICKS-120||sim.t===TICKS-60)sfx('tick');
-  if(sim.endAt===null&&sim.ents.every(e=>!e.alive))sim.endAt=sim.t+45; // everyone knocked out
   if(sim.t>=TICKS||(sim.endAt!==null&&sim.t>=sim.endAt)){if(sim.replay)replayDone();else endRound();}
 }
 function tickFx(){for(const f of sim.fx)f.t++;sim.fx=sim.fx.filter(f=>f.t<f.m);}
@@ -755,8 +785,11 @@ function aiInput(e,t){
         if(s.shadowGoal)best={x:s.shadowGoal.x,y:s.shadowGoal.y};
       }
       const hunter=ch==='ninja'||ch==='ranger'||ch==='frost'||ch==='ghost';
+      const foeRunner=nearest(foes.filter(f=>f.ch==='runner'),e),myRunner=nearest(sim.ents.filter(f=>f.alive&&f.p===e.p&&f.ch==='runner'),e);
       if(foeCarrier&&(hunter||!best))best={x:foeCarrier.x,y:foeCarrier.y};
+      else if(foeRunner&&hunter&&(!best||dist(foeRunner,e)<220))best={x:foeRunner.x,y:foeRunner.y};
       else if(o&&hunter&&(!best||dist(o,e)<140))best={x:o.x,y:o.y};
+      else if(ch==='ben'&&myRunner&&(!best||dist(myRunner,e)<260))best={x:myRunner.x,y:myRunner.y};
     }
     if(!best)best={x:GOAL.x,y:GOAL.y};
     s.goal=best;s.field=bfsFrom(Math.floor(best.x/T),Math.floor(best.y/T));
@@ -767,7 +800,7 @@ function aiInput(e,t){
   let tx=g.x,ty=g.y;const here=e.ch==='ghost'?0:f[mr*COLS+mc];
   if(here>1){let bn=null,bv=here;for(const[ax,ay]of N4){const nc=mc+ax,nr=mr+ay;if(solid(nc,nr))continue;const v=f[nr*COLS+nc];if(v>=0&&v<bv){bv=v;bn=[nc,nr];}}if(bn){tx=bn[0]*T+16;ty=bn[1]*T+16;}}
   const vx=tx-e.x,vy=ty-e.y,dx=Math.abs(vx)>2?Math.sign(vx):0,dy=Math.abs(vy)>2?Math.sign(vy):0;
-  if(ch==='time'&&e.cd===0&&sim.ents.some(o=>o.alive&&!o.live&&o.p!==e.p&&(o.carry.length||dist(o,e)<180)))return enc(dx,dy,true);
+  if(ch==='time'&&e.cd===0&&sim.ents.some(o=>o.alive&&!o.live&&o.ch!=='runner'&&o.p!==e.p&&(o.carry.length||dist(o,e)<180)))return enc(dx,dy,true);
   if(ch==='ben'&&e.tier>=2&&!e.dropped&&dhypot(GOAL.x-e.x,GOAL.y-e.y)<70)return enc(dx,dy,true); // shield the ring
   if(ch==='ghost'&&e.tier>=2&&!e.dropped&&dhypot(GOAL.x-e.x,GOAL.y-e.y)<70)return enc(dx,dy,true); // guard the ring
   if(ch==='sprinter'&&e.cd===0&&dhypot(g.x-e.x,g.y-e.y)>140&&Math.random()<0.04)return enc(dx,dy,true);
@@ -942,9 +975,9 @@ async function submitTurn(last){ // called at the end of your online turn
 function showSetup(){
   state='setup';G=null;sim=null;view=null;prevSim=null;showTouch();
   showOv(`<div class="panel">
-    <p class="eyebrow">1v1 · Turn based · 4 crystals</p>
+    <p class="eyebrow">1v1 · Turn based · Runners and a crystal</p>
     <h2>Every turn, your past selves run it back.</h2>
-    <p>Players take 10-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Carry crystals to the center ring to score, and knock out enemy echoes before they take the crystals away.</p>
+    <p>Players take 10-second turns. On your turn you play alone against the echoes of every earlier turn, yours and your opponent's, each repeating its exact moves. Each turn both sides send 2 runners across the arena, worth 1 point each if they make it. Protect yours, stop theirs, and carry the crystal to the center ring for a bonus point.</p>
     <p class="note">Before each turn you draft a character you haven't used yet.</p>
     <div class="opts">
       <div class="opt"><span>Opponent</span><div class="seg" data-k="mode"><button type="button" data-v="cpu">Computer</button><button type="button" data-v="2p">Second player</button></div></div>
@@ -986,7 +1019,7 @@ function buyAndStart(p,k,tier){
   startRound();
 }
 function showHowTo(){
-  showOv(`<div class="panel wide"><p class="eyebrow">How to play</p><h2>Carry crystals to the center ring.</h2>${$('rules').innerHTML}
+  showOv(`<div class="panel wide"><p class="eyebrow">How to play</p><h2>Get your runners across. Stop theirs.</h2>${$('rules').innerHTML}
     <button class="btn" id="back" type="button">Back</button></div>`);
   $('back').onclick=showSetup;
 }
@@ -1068,13 +1101,13 @@ function endRound(){
   const live=sim.ents.find(e=>e.live), p=live.p, sc=sim.score, closing=G.half===1;
   G.turns.push({p,r:G.round,ch:live.ch,rec:live.rec,tier:live.tier,aimRec:live.aimRec});
   if(closing){G.total[1]+=sc[1];G.total[2]+=sc[2];G.roundRes[G.round]={1:sc[1],2:sc[2],k1:sim.kills[1],k2:sim.kills[2]};}
-  const nb=closing&&G.round+1<G.rounds&&G.round+1>=2?computeBonus(G.round+1):null; // rounds 3-5 only
+  const nb=closing&&G.round+1<G.rounds&&G.round+1>=3?computeBonus(G.round+1):null; // rounds 4-5 only
   prevSim=sim;
   const last=G.round+1>=G.rounds&&G.half===1;
   let nextLabel='See final result';
   if(!last){const nr=G.half===1?G.round+1:G.round,np=G.half===1?first(nr):3-p;nextLabel=`${NAME[np]}'s turn${G.half===1?` · Round ${nr+1}`:''}`;}
   const shown=sim.log.filter(l=>l[2]!=='info'); // only deliveries and knockouts
-  const items=shown.length?shown.map(([t,s])=>`<li><time>${stamp(t)}</time><span>${s}</span></li>`).join(''):'<li><time></time><span>No crystals delivered and no knockouts.</span></li>';
+  const items=shown.length?shown.map(([t,s])=>`<li><time>${stamp(t)}</time><span>${s}</span></li>`).join(''):'<li><time></time><span>Nobody scored and no knockouts.</span></li>';
   showOv(`<div class="panel">
     <p class="eyebrow">Round ${G.round+1} of ${G.rounds} · ${NAME[p]}'s turn complete</p>
     <h2>${closing?`Round ${G.round+1} banked: `:'Provisional: '}<span class="p1c">${NAME[1]} ${sc[1]}</span> · <span class="p2c">${NAME[2]} ${sc[2]}</span></h2>
@@ -1193,7 +1226,7 @@ const RM=matchMedia('(prefers-reduced-motion: reduce)');
 function drawTrails(s,alpha){
   ctx.save();ctx.lineWidth=2;ctx.setLineDash([3,5]);ctx.lineJoin='round';
   for(const e of s.ents){
-    if(e.trail.length<4)continue;
+    if(e.ch==='runner'||e.trail.length<4)continue;
     ctx.strokeStyle=COL[e.p];ctx.globalAlpha=alpha;
     ctx.beginPath();ctx.moveTo(e.trail[0],e.trail[1]);
     for(let i=2;i<e.trail.length;i+=2)ctx.lineTo(e.trail[i],e.trail[i+1]);
@@ -1345,6 +1378,14 @@ const SPRITES={
     ctx.beginPath();ctx.moveTo(0,-3.6);ctx.lineTo(2.2,0);ctx.lineTo(0,3.6);ctx.lineTo(-2.2,0);ctx.closePath();ctx.fill();ctx.restore();
   }
 };
+SPRITES.runner=function(ctx,p,t){ // small courier drone: team-coloured shell, bobbing feet, arrow on its back
+  spriteShadow(ctx);
+  const s=dsin(t/55)*2.2;
+  blob(ctx,-2,-6+s*.3,2.4,2,'#2a3134','#0c0f11',.8);blob(ctx,-2,6-s*.3,2.4,2,'#2a3134','#0c0f11',.8);
+  blob(ctx,0,0,8,7.5,COL[p],'#0c0f11',1.2);
+  ctx.fillStyle=TEAM_DEEP[p];ctx.beginPath();ctx.moveTo(5,0);ctx.lineTo(-2,-4.5);ctx.lineTo(-.5,0);ctx.lineTo(-2,4.5);ctx.closePath();ctx.fill();
+  blob(ctx,6,0,1.6,1.6,'#e9fbff','#0c0f11',.6);
+};
 function drawSprite(ctx,ch,p,t,opts){
   const f=SPRITES[ch];
   if(ch==='ranger')f._draw=opts&&opts.draw||0;
@@ -1375,7 +1416,7 @@ function drawEnt(e){
     ctx.beginPath();ctx.moveTo(-6,-6);ctx.lineTo(6,6);ctx.moveTo(6,-6);ctx.lineTo(-6,6);ctx.stroke();
     ctx.restore();return;
   }
-  ctx.globalAlpha=(e.live?1:.62)*(e.ch==='ghost'?.8:1);
+  ctx.globalAlpha=(e.live||e.ch==='runner'?1:.62)*(e.ch==='ghost'?.8:1); // runners are always drawn solid
   // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
   ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
   ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
@@ -1387,7 +1428,7 @@ function drawEnt(e){
     if(f>=1){ctx.shadowColor='#ffffff';ctx.shadowBlur=10;}
     ctx.beginPath();ctx.arc(0,0,R+5,-Math.PI/2,-Math.PI/2+Math.PI*2*Math.max(.02,f));ctx.stroke();ctx.shadowBlur=0;
   }
-  if(!e.live){ctx.setLineDash([3,3]);ctx.strokeStyle='#e7eee9';ctx.lineWidth=1;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
+  if(!e.live&&e.ch!=='runner'){ctx.setLineDash([3,3]);ctx.strokeStyle='#e7eee9';ctx.lineWidth=1;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);}
   if(e.stopped>0){ // time-stopped: grey veil and a ticking clock hand
     ctx.save();ctx.globalAlpha=.8;ctx.fillStyle='rgba(200,205,230,.28)';ctx.strokeStyle='#d8dcf0';ctx.lineWidth=1.5;
     ctx.beginPath();ctx.arc(0,0,R+4,0,Math.PI*2);ctx.fill();ctx.stroke();
@@ -1399,7 +1440,7 @@ function drawEnt(e){
   }
   ctx.globalAlpha=e.live?1:.8;
   ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillStyle=e.live?c:'#c3d0cc';
-  const lbl=e.live?NAME[e.p].toUpperCase():'R'+(e.r+1);
+  const lbl=e.live?NAME[e.p].toUpperCase():e.ch==='runner'?'':'R'+(e.r+1);
   ctx.fillText(lbl,0,-R-8);
   if(e.tier){ // one small crystal per upgrade tier, after the label
     const w=ctx.measureText(lbl).width/2+6;ctx.fillStyle=CRY;
@@ -1453,6 +1494,10 @@ function draw(){
   ctx.fillStyle='rgba(212,195,255,.6)';ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillText('SCORE',GOAL.x,GOAL.y+GOAL.r+14);
   // crystal pedestals
   for(const c of v.crystals.map(k=>({x:k.hx,y:k.hy}))){ctx.strokeStyle='rgba(212,195,255,.25)';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(c.x,c.y,18,0,Math.PI*2);ctx.stroke();}
+  // runner lanes
+  ctx.save();ctx.lineWidth=2;ctx.setLineDash([2,10]);ctx.lineCap='round';ctx.strokeStyle='rgba(231,238,233,.13)';
+  for(const bottom of [false,true]){const l=laneFor(1,bottom);ctx.beginPath();ctx.moveTo(l[0][0],l[0][1]);for(const [x,y] of l.slice(1))ctx.lineTo(x,y);ctx.stroke();}
+  ctx.restore();
   // trails
   if(state==='play'&&sim&&sim.phase==='ready'&&prevSim)drawTrails(prevSim,.35);
   else if(state!=='play'&&view)drawTrails(view,.3);
@@ -1536,7 +1581,7 @@ function draw(){
     ctx.fillStyle='#c3d0cc';ctx.font='500 15px Barlow, sans-serif';
     const n=G.turns.length;
     if(!cpuTurn()){ctx.fillStyle='#8a9d99';ctx.fillText('Left side: drag to move. Right side: touch to act (hold to draw the bow).',480,408);ctx.fillStyle='#c3d0cc';}
-    ctx.fillText(n?`${n} echo${n>1?'es':''} will replay. ${G.half?`This turn decides round ${G.round+1}'s score.`:'Deliveries this turn are provisional.'}`:'No echoes yet. Everything you do now replays on every later turn.',480,384);
+    ctx.fillText(n?`${n} echo${n>1?'es':''} will replay. ${G.half?`This turn decides round ${G.round+1}'s score.`:'Scores this turn are provisional.'}`:'No echoes yet. Everything you do now replays on every later turn.',480,384);
     if(live)drawEnt(live); // redraw the live character above the dimming so it stands out
   }
   if(state==='replay'&&sim.focus&&sim.focus.alive){ // replay: mark whose turn it was
