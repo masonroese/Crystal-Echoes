@@ -1121,7 +1121,7 @@ function showDraft(){
     $('upg').innerHTML=`<h3>${c.name} upgrades</h3>
       <p class="bank">You have <b>${bank}</b> banked crystal${bank===1?'':'s'}. Upgrades are paid from your score and last for this character's turn and all of its echoes.</p>
       <div class="tiers">${opts.map((o,i)=>`<button type="button" class="tier" data-t="${i}" aria-pressed="${i===tier}" ${o.na||o.cost>bank?'disabled':''}>
-        <b>${o.name}</b><span class="cost">${o.cost?`Costs ${o.cost} crystal${o.cost>1?'s':''}${i===2?' total':''}`:'Free'}</span><span>${o.text}</span></button>`).join('')}</div>
+        ${sheets[sel]&&(sheets[sel+'-1']||sheets[sel+'-2'])?`<img class="spr" src="${portrait(sheets[sel+'-'+i]?sel+'-'+i:sel,p)}" alt="">`:''}<b>${o.name}</b><span class="cost">${o.cost?`Costs ${o.cost} crystal${o.cost>1?'s':''}${i===2?' total':''}`:'Free'}</span><span>${o.text}</span></button>`).join('')}</div>
       <button class="btn" id="play" type="button">Play ${c.name}${tierTag(tier)}${tier?` · spend ${tier}`:''}</button>`;
     $('upg').querySelectorAll('.tier:not(:disabled)').forEach(b=>b.onclick=()=>{tier=+b.dataset.t;renderUpg();});
     $('play').onclick=()=>buyAndStart(p,sel,tier);
@@ -1488,6 +1488,7 @@ function drawSprite(ctx,ch,p,t,opts){
 
 /* ---------- character sprite sheets ----------
    A character with a sheet at sprites/<character>.png is drawn from it; the others keep the figures above.
+   Tier 1 and Tier 2 can have their own sheets (sprites/<character>-1.png, -2.png); a tier without one uses the base sheet with a crystal glow.
    Add a character's name to SHEETS once its sheet is in place. Template and spec: art/sprite-template-guide.png.
    Sheet: 432x192 PNG, 48x48 cells, art facing right (left is mirrored), cell centre = the character's position.
      row 0: idle, damaged, death
@@ -1495,10 +1496,10 @@ function drawSprite(ctx,ch,p,t,opts){
      row 2: walk up-right 1-3, walk down-right 1-3
      row 3: attack right 1-3, attack up 1-3, attack down 1-3
    Empty cells are allowed: the game falls back (diagonal walk -> walk right, attack up -> attack right, anything -> idle). */
-const SHEETS=['ninja']; // add each character once its sheet is in sprites/
+const SHEETS=['ninja','ninja-1','ninja-2']; // add each sheet once it is in sprites/: 'ninja' is the base, 'ninja-1' / 'ninja-2' the upgrade tiers
 const CELL=48, sheets={}; // character -> {img, filled: set of "col,row" cells that have art}
 let drawT=0; // tick of the turn being drawn, for animation timing
-for(const ch of SHEETS){
+for(const ch of SHEETS){ // ch: a sheet name, such as 'ninja' or 'ninja-2'
   const img=new Image();
   img.onload=()=>{
     const filled=new Set();
@@ -1516,9 +1517,10 @@ for(const ch of SHEETS){
   };
   img.src=`sprites/${ch}.png`;
 }
+const sheetOf=e=>sheets[e.ch+'-'+e.tier]||sheets[e.ch]; // this tier's own sheet, or the base one
 // which cell to show, and whether to mirror it for facing left
 function sheetCell(e){
-  const has=(c,r)=>sheets[e.ch].filled.has(c+','+r),pick=list=>list.find(([c,r])=>has(c,r))||[0,0];
+  const has=(c,r)=>sheetOf(e).filled.has(c+','+r),pick=list=>list.find(([c,r])=>has(c,r))||[0,0];
   const left=!!e.faceL;
   if(!e.alive)return [...pick(e.koT!=null&&drawT-e.koT<12?[[1,0],[2,0]]:[[2,0],[1,0]]),left]; // a moment of "damaged", then death
   if(e.frozen>0||(e.hurtT!=null&&drawT-e.hurtT<12))return [...pick([[1,0]]),left];
@@ -1541,8 +1543,8 @@ function sheetCell(e){
 function drawSheet(e){ // draws the current cell centred on the character
   const [c,r,flip]=sheetCell(e);
   ctx.save();if(flip)ctx.scale(-1,1);
-  if(e.tier&&e.alive){ctx.shadowColor=CRY;ctx.shadowBlur=e.tier*6;} // upgraded: a crystal glow
-  ctx.drawImage(sheets[e.ch].img,c*CELL,r*CELL,CELL,CELL,-CELL/2,-CELL/2,CELL,CELL);
+  if(e.tier&&e.alive&&!sheets[e.ch+'-'+e.tier]){ctx.shadowColor=CRY;ctx.shadowBlur=e.tier*6;} // upgraded without its own art: a crystal glow
+  ctx.drawImage(sheetOf(e).img,c*CELL,r*CELL,CELL,CELL,-CELL/2,-CELL/2,CELL,CELL);
   ctx.restore();
 }
 // small portraits for the draft cards, rendered once per character and team
@@ -1566,7 +1568,7 @@ function drawEnt(e){
     ctx.strokeStyle='#11181a';ctx.lineWidth=2.2;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-4,0);ctx.lineTo(-1,3.5);ctx.lineTo(4.5,-3.5);ctx.stroke();
     ctx.restore();return;
   }
-  if(!e.alive&&sheets[e.ch]){ctx.globalAlpha=.55;drawSheet(e);ctx.restore();return;} // death frame, faded
+  if(!e.alive&&sheetOf(e)){ctx.globalAlpha=.55;drawSheet(e);ctx.restore();return;} // death frame, faded
   if(!e.alive){ // knocked out: faded figure with an X
     ctx.save();ctx.globalAlpha=.25;ctx.rotate(datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);drawSprite(ctx,e.ch,e.p,0);ctx.restore();
     ctx.globalAlpha=.5;ctx.strokeStyle=c;ctx.lineWidth=2;
@@ -1578,7 +1580,7 @@ function drawEnt(e){
   // team-coloured ground ring (glows for the live character), then the figure turned to face its direction
   ctx.save();if(e.live){ctx.shadowColor=c;ctx.shadowBlur=12;}
   ctx.strokeStyle=c;ctx.lineWidth=e.live?2:1.5;ctx.globalAlpha*=e.live?.9:.7;ctx.beginPath();ctx.arc(0,0,R+3,0,Math.PI*2);ctx.stroke();ctx.restore();
-  if(sheets[e.ch])drawSheet(e);
+  if(sheetOf(e))drawSheet(e);
   else{
     ctx.save();ctx.rotate(e.ch==='sniper'||AIMS(e.ch)?e.aim:datan2(e.fy,e.fx));ctx.scale(ART_SCALE,ART_SCALE);
     drawSprite(ctx,e.ch,e.p,clock+e.r*300,{draw:e.charge>=0?Math.min(1,e.charge/CHARGE_MAX):0});
@@ -1602,7 +1604,7 @@ function drawEnt(e){
   ctx.globalAlpha=e.live?1:.8;
   ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillStyle=e.live?c:'#c3d0cc';
   const lbl=e.live?NAME[e.p].toUpperCase():e.ch==='runner'?'':'R'+(e.r+1);
-  const ly=sheets[e.ch]?-CELL/2:-R-8; // above the sprite's cell, or above the drawn figure
+  const ly=sheetOf(e)?-CELL/2:-R-8; // above the sprite's cell, or above the drawn figure
   ctx.fillText(lbl,0,ly);
   if(e.tier){ // one small crystal per upgrade tier, after the label
     const w=ctx.measureText(lbl).width/2+6;ctx.fillStyle=CRY;
