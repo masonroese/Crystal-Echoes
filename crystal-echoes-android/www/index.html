@@ -1497,6 +1497,7 @@ function drawSprite(ctx,ch,p,t,opts){
      row 3: attack right 1-3, attack up 1-3, attack down 1-3
    Empty cells are allowed: the game falls back (diagonal walk -> walk right, attack up -> attack right, anything -> idle). */
 const SHEETS=['ninja','ninja-1','ninja-2','sprinter','sprinter-1','sprinter-2']; // add each sheet once it is in sprites/: 'ninja' is the base, 'ninja-1' / 'ninja-2' the upgrade tiers
+const SHEET_SIZE={sprinter:.85}; // per-character drawing size, for art drawn larger or smaller than the rest (1 = as drawn)
 const CELL=48, sheets={}; // character -> {img, filled: set of "col,row" cells that have art}
 let drawT=0; // tick of the turn being drawn, for animation timing
 for(const ch of SHEETS){ // ch: a sheet name, such as 'ninja' or 'ninja-2'
@@ -1542,7 +1543,8 @@ function sheetCell(e){
 }
 function drawSheet(e){ // draws the current cell centred on the character
   const [c,r,flip]=sheetCell(e);
-  ctx.save();if(flip)ctx.scale(-1,1);
+  const k=SHEET_SIZE[e.ch]||1;
+  ctx.save();ctx.scale(flip?-k:k,k);
   if(e.tier&&e.alive&&!sheets[e.ch+'-'+e.tier]){ctx.shadowColor=CRY;ctx.shadowBlur=e.tier*6;} // upgraded without its own art: a crystal glow
   ctx.drawImage(sheetOf(e).img,c*CELL,r*CELL,CELL,CELL,-CELL/2,-CELL/2,CELL,CELL);
   ctx.restore();
@@ -1604,7 +1606,7 @@ function drawEnt(e){
   ctx.globalAlpha=e.live?1:.8;
   ctx.font='600 10px "Chakra Petch", sans-serif';ctx.textAlign='center';ctx.fillStyle=e.live?c:'#c3d0cc';
   const lbl=e.live?NAME[e.p].toUpperCase():e.ch==='runner'?'':'R'+(e.r+1);
-  const ly=sheetOf(e)?-CELL/2:-R-8; // above the sprite's cell, or above the drawn figure
+  const ly=sheetOf(e)?-CELL/2*(SHEET_SIZE[e.ch]||1):-R-8; // above the sprite's cell, or above the drawn figure
   ctx.fillText(lbl,0,ly);
   if(e.tier){ // one small crystal per upgrade tier, after the label
     const w=ctx.measureText(lbl).width/2+6;ctx.fillStyle=CRY;
